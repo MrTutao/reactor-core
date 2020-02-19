@@ -16,8 +16,10 @@
 package reactor.core.publisher;
 
 import java.util.Collection;
+import java.util.Iterator;
 import java.util.Objects;
 import java.util.Queue;
+import java.util.Spliterator;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
@@ -41,11 +43,12 @@ import reactor.util.Logger;
 import reactor.util.Loggers;
 import reactor.util.annotation.Nullable;
 import reactor.util.context.Context;
+import reactor.util.function.Tuple2;
 
 import static reactor.core.Fuseable.NONE;
 
 /**
- * An helper to support "Operator" writing, handle noop subscriptions, validate request
+ * A helper to support "Operator" writing, handle noop subscriptions, validate request
  * size and to cap concurrent additive operations to Long.MAX_VALUE,
  * which is generic to {@link Subscription#request(long)} handling.
  *
@@ -433,16 +436,33 @@ public abstract class Operators {
 				}
 
 				if (extract != null) {
-					extract.apply(toDiscard)
-					       .forEach(hook);
+					try {
+						extract.apply(toDiscard)
+						       .forEach(elementToDiscard -> {
+							       try {
+								       hook.accept(elementToDiscard);
+							       }
+							       catch (Throwable t) {
+								       log.warn("Error while discarding item extracted from a queue element, continuing with next item", t);
+							       }
+						       });
+					}
+					catch (Throwable t) {
+						log.warn("Error while extracting items to discard from queue element, continuing with next queue element", t);
+					}
 				}
 				else {
-					hook.accept(toDiscard);
+					try {
+						hook.accept(toDiscard);
+					}
+					catch (Throwable t) {
+						log.warn("Error while discarding a queue element, continuing with next queue element", t);
+					}
 				}
 			}
 		}
 		catch (Throwable t) {
-			log.warn("Error in discard hook while discarding and clearing a queue", t);
+			log.warn("Cannot further apply discard hook while discarding and clearing a queue", t);
 		}
 	}
 
@@ -463,10 +483,17 @@ public abstract class Operators {
 		if (hook != null) {
 			try {
 				multiple.filter(Objects::nonNull)
-				        .forEach(hook);
+				        .forEach(v -> {
+				        	try {
+				        		hook.accept(v);
+					        }
+				        	catch (Throwable t) {
+				        		log.warn("Error while discarding a stream element, continuing with next element", t);
+					        }
+				        });
 			}
 			catch (Throwable t) {
-				log.warn("Error in discard hook while discarding multiple values", t);
+				log.warn("Error while discarding stream, stopping", t);
 			}
 		}
 	}
@@ -492,12 +519,54 @@ public abstract class Operators {
 				}
 				for (Object o : multiple) {
 					if (o != null) {
-						hook.accept(o);
+						try {
+							hook.accept(o);
+						}
+						catch (Throwable t) {
+							log.warn("Error while discarding element from a Collection, continuing with next element", t);
+						}
 					}
 				}
 			}
 			catch (Throwable t) {
-				log.warn("Error in discard hook while discarding multiple values", t);
+				log.warn("Error while discarding collection, stopping", t);
+			}
+		}
+	}
+
+  /**
+   * Invoke a (local or global) hook that processes elements that remains in an {@link java.util.Iterator}.
+   * Since iterators can be infinite, this method requires that you explicitly ensure the iterator is
+   * {@code knownToBeFinite}. Typically, operating on an {@link Iterable} one can get such a
+   * guarantee by looking at the {@link Iterable#spliterator() Spliterator's} {@link Spliterator#getExactSizeIfKnown()}.
+   *
+   * @param multiple the {@link Iterator} whose remainder to discard
+   * @param knownToBeFinite is the caller guaranteeing that the iterator is finite and can be iterated over
+   * @param context the {@link Context} in which to look for local hook
+   * @see #onDiscard(Object, Context)
+   * @see #onDiscardMultiple(Collection, Context)
+   * @see #onDiscardQueueWithClear(Queue, Context, Function)
+   */
+	public static void onDiscardMultiple(@Nullable Iterator<?> multiple, boolean knownToBeFinite, Context context) {
+		if (multiple == null) return;
+		if (!knownToBeFinite) return;
+
+		Consumer<Object> hook = context.getOrDefault(Hooks.KEY_ON_DISCARD, null);
+		if (hook != null) {
+			try {
+				multiple.forEachRemaining(o -> {
+					if (o != null) {
+						try {
+							hook.accept(o);
+						}
+						catch (Throwable t) {
+							log.warn("Error while discarding element from an Iterator, continuing with next element", t);
+						}
+					}
+				});
+			}
+			catch (Throwable t) {
+				log.warn("Error while discarding Iterator, stopping", t);
 			}
 		}
 	}
@@ -682,15 +751,18 @@ public abstract class Operators {
 	 *     return {@code false} to indicate value was not consumed and more must be
 	 *     tried.</li>
 	 *
-	 *     <li>{@code poll}: use {@link #onNextPollError(Object, Throwable, Context)} instead.</li>
+	 *     <li>any of the above where the error is going to be propagated through onError but the
+	 *     subscription shouldn't be cancelled: use {@link #onNextError(Object, Throwable, Context)} instead.</li>
+	 *
+	 *     <li>{@code poll} (where the error will be thrown): use {@link #onNextPollError(Object, Throwable, Context)} instead.</li>
 	 * </ul>
 	 *
-	 * @param value The onNext value that caused an error.
+	 * @param value The onNext value that caused an error. Can be null.
 	 * @param error The error.
 	 * @param context The most significant {@link Context} in which to look for an {@link OnNextFailureStrategy}.
-	 * @param subscriptionForCancel The {@link Subscription} that should be cancelled if the
-	 * strategy is terminal. Not null, use {@link #onNextPollError(Object, Throwable, Context)}
-	 * when unsubscribing is undesirable (eg. for poll()).
+	 * @param subscriptionForCancel The mandatory {@link Subscription} that should be cancelled if the
+	 * strategy is terminal. See also {@link #onNextError(Object, Throwable, Context)} and
+	 * {@link #onNextPollError(Object, Throwable, Context)} for alternatives that don't cancel a subscription
 	 * @param <T> The type of the value causing the error.
 	 * @return a {@link Throwable} to propagate through onError if the strategy is
 	 * terminal and cancelled the subscription, null if not.
@@ -711,6 +783,35 @@ public abstract class Operators {
 		else {
 			//falls back to operator errors
 			return onOperatorError(subscriptionForCancel, error, value, context);
+		}
+	}
+
+	/**
+	 * Find the {@link OnNextFailureStrategy} to apply to the calling async operator (which could be
+	 * a local error mode defined in the {@link Context}) and apply it.
+	 * <p>
+	 * This variant never cancels a {@link Subscription}. It returns a {@link Throwable} if the error is
+	 * fatal for the error mode, in which case the operator should call onError with the
+	 * returned error. On the contrary, if the error mode allows the sequence to
+	 * continue, this method returns {@code null}.
+	 *
+	 * @param value The onNext value that caused an error.
+	 * @param error The error.
+	 * @param context The most significant {@link Context} in which to look for an {@link OnNextFailureStrategy}.
+	 * @param <T> The type of the value causing the error.
+	 * @return a {@link Throwable} to propagate through onError if the strategy is terminal, null if not.
+	 * @see #onNextError(Object, Throwable, Context, Subscription)
+	 */
+	@Nullable
+	public static <T> Throwable onNextError(@Nullable T value, Throwable error, Context context) {
+		error = unwrapOnNextError(error);
+		OnNextFailureStrategy strategy = onNextErrorStrategy(context);
+		if (strategy.test(error, value)) {
+			//some strategies could still return an exception, eg. if the consumer throws
+			return strategy.process(error, value, context);
+		}
+		else {
+			return onOperatorError(null, error, value, context);
 		}
 	}
 
@@ -747,20 +848,26 @@ public abstract class Operators {
 	 * Find the {@link OnNextFailureStrategy} to apply to the calling async operator (which could be
 	 * a local error mode defined in the {@link Context}) and apply it.
 	 * <p>
-	 * Returns a {@link RuntimeException} if errors are fatal for the error mode, in which
+	 * Returns a {@link RuntimeException} if the error is fatal for the error mode, in which
 	 * case the operator poll should throw the returned error. On the contrary if the
 	 * error mode allows the sequence to continue, returns {@code null} in which case
 	 * the operator should retry the {@link Queue#poll() poll()}.
+	 * <p>
+	 * Note that this method {@link Exceptions#propagate(Throwable) wraps} checked exceptions in order to
+	 * return a {@link RuntimeException} that can be thrown from an arbitrary method. If you don't want to
+	 * throw the returned exception and this wrapping behavior is undesirable, but you still don't want to
+	 * cancel a subscription, you can use {@link #onNextError(Object, Throwable, Context)} instead.
 	 *
 	 * @param value The onNext value that caused an error.
 	 * @param error The error.
 	 * @param context The most significant {@link Context} in which to look for an {@link OnNextFailureStrategy}.
 	 * @param <T> The type of the value causing the error.
-	 * @return a {@link Throwable} to propagate through onError if the strategy is
-	 * terminal and cancelled the subscription, null if not.
+	 * @return a {@link RuntimeException} to be thrown (eg. within {@link Queue#poll()} if the error is terminal in
+	 * the strategy, null if not.
+	 * @see #onNextError(Object, Throwable, Context)
 	 */
 	@Nullable
-	public static <T> RuntimeException onNextPollError(T value, Throwable error, Context context) {
+	public static <T> RuntimeException onNextPollError(@Nullable T value, Throwable error, Context context) {
 		error = unwrapOnNextError(error);
 		OnNextFailureStrategy strategy = onNextErrorStrategy(context);
 		if (strategy.test(error, value)) {
@@ -786,13 +893,11 @@ public abstract class Operators {
 	@SuppressWarnings("unchecked")
 	public static <T> CorePublisher<T> onLastAssembly(CorePublisher<T> source) {
 		Function<Publisher, Publisher> hook = Hooks.onLastOperatorHook;
-		final Publisher<T> publisher;
 		if (hook == null) {
-			publisher = source;
+			return source;
 		}
-		else {
-			publisher = Objects.requireNonNull(hook.apply(source),"LastOperator hook returned null");
-		}
+
+		Publisher<T> publisher = Objects.requireNonNull(hook.apply(source),"LastOperator hook returned null");
 
 		if (publisher instanceof CorePublisher) {
 			return (CorePublisher<T>) publisher;
@@ -1269,12 +1374,17 @@ public abstract class Operators {
 	Operators() {
 	}
 
-	static final class CorePublisherAdapter<T> implements CorePublisher<T> {
+	static final class CorePublisherAdapter<T> implements CorePublisher<T>,
+	                                                      OptimizableOperator<T, T> {
 
 		final Publisher<T> publisher;
 
+		@Nullable
+		final OptimizableOperator<?, T> optimizableOperator;
+
 		CorePublisherAdapter(Publisher<T> publisher) {
 			this.publisher = publisher;
+			this.optimizableOperator = publisher instanceof OptimizableOperator ? (OptimizableOperator) publisher : null;
 		}
 
 		@Override
@@ -1285,7 +1395,21 @@ public abstract class Operators {
 		@Override
 		public void subscribe(Subscriber<? super T> s) {
 			publisher.subscribe(s);
+		}
 
+		@Override
+		public CoreSubscriber<? super T> subscribeOrReturn(CoreSubscriber<? super T> actual) {
+			return actual;
+		}
+
+		@Override
+		public final CorePublisher<? extends T> source() {
+			return this;
+		}
+
+		@Override
+		public final OptimizableOperator<?, ? extends T> nextOptimizableSource() {
+			return optimizableOperator;
 		}
 	}
 
@@ -1312,6 +1436,11 @@ public abstract class Operators {
 		public void onComplete() {
 			Throwable e = new IllegalStateException("onComplete should not be used");
 			log.error("Unexpected call to Operators.emptySubscriber()", e);
+		}
+
+		@Override
+		public Context currentContext() {
+			return Context.empty();
 		}
 	};
 	//
@@ -1518,10 +1647,10 @@ public abstract class Operators {
 
 		@Override
 		public void cancel() {
-			if (STATE.getAndSet(this, CANCELLED) <= HAS_REQUEST_NO_VALUE) {
-				Operators.onDiscard(value, currentContext());
-			}
+			O v = value;
 			value = null;
+			STATE.set(this, CANCELLED);
+			discard(v);
 		}
 
 		@Override
@@ -1565,6 +1694,7 @@ public abstract class Operators {
 
 				// if state is >= HAS_CANCELLED or bit zero is set (*_HAS_VALUE) case, return
 				if ((state & ~HAS_REQUEST_NO_VALUE) != 0) {
+					this.value = null;
 					discard(v);
 					return;
 				}
@@ -1583,8 +1713,14 @@ public abstract class Operators {
 			}
 		}
 
+		/**
+		 * Discard the given value, generally this.value field. Lets derived subscriber with further knowledge about
+		 * the possible types of the value discard such values in a specific way. Note that fields should generally be
+		 * nulled out along the discard call.
+		 *
+		 * @param v the value to discard
+		 */
 		protected void discard(O v) {
-			this.value = null;
 			Operators.onDiscard(v, actual.currentContext());
 		}
 
@@ -2176,6 +2312,11 @@ public abstract class Operators {
 		@Override
 		public void onComplete() {
 
+		}
+
+		@Override
+		public Context currentContext() {
+			return Context.empty();
 		}
 	}
 

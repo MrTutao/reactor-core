@@ -45,7 +45,7 @@ import reactor.util.context.Context;
  *
  * @see <a href="https://github.com/reactor/reactive-streams-commons">Reactive-Streams-Commons</a>
  */
-final class FluxGroupBy<T, K, V> extends FluxOperator<T, GroupedFlux<K, V>>
+final class FluxGroupBy<T, K, V> extends InternalFluxOperator<T, GroupedFlux<K, V>>
 		implements Fuseable {
 
 	final Function<? super T, ? extends K> keySelector;
@@ -78,12 +78,12 @@ final class FluxGroupBy<T, K, V> extends FluxOperator<T, GroupedFlux<K, V>>
 	}
 
 	@Override
-	public void subscribe(CoreSubscriber<? super GroupedFlux<K, V>> actual) {
-		source.subscribe(new GroupByMain<>(actual,
+	public CoreSubscriber<? super T> subscribeOrReturn(CoreSubscriber<? super GroupedFlux<K, V>> actual) {
+		return new GroupByMain<>(actual,
 				mainQueueSupplier.get(),
 				groupQueueSupplier,
 				prefetch,
-				keySelector, valueSelector));
+				keySelector, valueSelector);
 	}
 
 	@Override
@@ -733,16 +733,20 @@ final class FluxGroupBy<T, K, V> extends FluxOperator<T, GroupedFlux<K, V>>
 				produced++;
 			}
 			else {
-				int p = produced;
-				if (p != 0) {
-					produced = 0;
-					GroupByMain<?, K, V> main = parent;
-					if (main != null) {
-						main.s.request(p);
-					}
-				}
+				tryReplenish();
 			}
 			return v;
+		}
+
+		void tryReplenish() {
+			int p = produced;
+			if (p != 0) {
+				produced = 0;
+				GroupByMain<?, K, V> main = parent;
+				if (main != null) {
+					main.s.request(p);
+				}
+			}
 		}
 
 		@Override
@@ -752,7 +756,11 @@ final class FluxGroupBy<T, K, V> extends FluxOperator<T, GroupedFlux<K, V>>
 
 		@Override
 		public boolean isEmpty() {
-			return queue.isEmpty();
+			if (queue.isEmpty()) {
+				tryReplenish();
+				return true;
+			}
+			return false;
 		}
 
 		@Override

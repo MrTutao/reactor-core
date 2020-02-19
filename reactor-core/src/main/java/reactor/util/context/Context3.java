@@ -21,7 +21,7 @@ import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.stream.Stream;
 
-final class Context3 implements Context {
+final class Context3 implements CoreContext {
 
 	final Object key1;
 	final Object value1;
@@ -33,12 +33,18 @@ final class Context3 implements Context {
 	Context3(Object key1, Object value1,
 			Object key2, Object value2,
 			Object key3, Object value3) {
-		this.key1 = key1;
-		this.value1 = value1;
-		this.key2 = key2;
-		this.value2 = value2;
-		this.key3 = key3;
-		this.value3 = value3;
+		if (Objects.requireNonNull(key1, "key1").equals(key2) || key1.equals(key3)) {
+			throw new IllegalArgumentException("Key #1 (" + key1 + ") is duplicated");
+		}
+		else if (Objects.requireNonNull(key2, "key2").equals(key3)) {
+			throw new IllegalArgumentException("Key #2 (" + key2 + ") is duplicated");
+		}
+		this.key1 = key1; //already checked for null above
+		this.value1 = Objects.requireNonNull(value1, "value1");
+		this.key2 = key2; //already checked for null above
+		this.value2 = Objects.requireNonNull(value2, "value2");
+		this.key3 = Objects.requireNonNull(key3, "key3");
+		this.value3 = Objects.requireNonNull(value3, "value3");
 	}
 
 	@Override
@@ -111,6 +117,21 @@ final class Context3 implements Context {
 				new AbstractMap.SimpleImmutableEntry<>(key1, value1),
 				new AbstractMap.SimpleImmutableEntry<>(key2, value2),
 				new AbstractMap.SimpleImmutableEntry<>(key3, value3));
+	}
+
+	@Override
+	public Context putAllInto(Context base) {
+		return base
+				.put(this.key1, this.value1)
+				.put(this.key2, this.value2)
+				.put(this.key3, this.value3);
+	}
+
+	@Override
+	public void unsafePutAllInto(ContextN other) {
+		other.accept(key1, value1);
+		other.accept(key2, value2);
+		other.accept(key3, value3);
 	}
 
 	@Override

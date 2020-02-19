@@ -62,9 +62,9 @@ Subscriber to Transformed MapAndFilter: PURPLE
 ----
 ====
 
-=== Using the `compose` Operator
+=== Using the `transformDeferred` Operator
 
-The `compose` operator is similar to `transform` and also lets you encapsulate operators
+The `transformDeferred` operator is similar to `transform` and also lets you encapsulate operators
 in a function. The major difference is that this function is applied to the original
 sequence _on a per-subscriber basis_. It means that the function can actually produce a
 different operator chain for each subscription (by maintaining some state). The
@@ -86,14 +86,14 @@ return f.filter(color -> !color.equals("orange"))
 Flux<String> composedFlux =
 Flux.fromIterable(Arrays.asList("blue", "green", "orange", "purple"))
     .doOnNext(System.out::println)
-    .compose(filterAndMap);
+    .transformDeferred(filterAndMap);
 
 composedFlux.subscribe(d -> System.out.println("Subscriber 1 to Composed MapAndFilter :"+d));
 composedFlux.subscribe(d -> System.out.println("Subscriber 2 to Composed MapAndFilter: "+d));
 ----
 ====
 
-The following image shows how the `compose` operator works with per-subscriber transformations:
+The following image shows how the `transformDeferred` operator works with per-subscriber transformations:
 
 image::https://raw.githubusercontent.com/reactor/reactor-core/v3.0.7.RELEASE/src/docs/marble/gs-compose.png[Compose Operator : Per Subscriber transformation]
 
@@ -581,8 +581,8 @@ method.
 As we described in the <<schedulers>> section, Reactor Core comes with several
 `Scheduler` implementations. While you can always create new instances through the `new*`
 factory methods, each `Scheduler` flavor also has a default singleton instance that is
-accessible through the direct factory method (such as `Schedulers.elastic()` versus
-`Schedulers.newElastic()`).
+accessible through the direct factory method (such as `Schedulers.boundedElastic()` versus
+`Schedulers.newBoundedElastic(...)`).
 
 These default instances are the ones used by operators that need a `Scheduler` to work
 when you do not explicitly specify one. For example, `Flux#delayElements(Duration)` uses
@@ -755,6 +755,7 @@ IMPORTANT: This is an advanced feature that is more targeted at library develope
 requires good understanding of the lifecycle of a `Subscription` and is intended for
 libraries that are responsible for the subscriptions.
 
+[[context.api]]
 === The `Context` API
 
 `Context` is an interface reminiscent of `Map`.It stores key-value pairs and lets you
@@ -784,6 +785,7 @@ the `Context`.
 Alternatively you can also create an empty `Context` by using `Context.empty()`.
 ====
 
+[[context.write]]
 === Tying a `Context` to a `Flux` and Writing
 
 To make a `Context` be useful, it must be tied to a specific sequence and be accessible by
@@ -808,6 +810,7 @@ as you see fit, and returns the new `Context` to use. You can even decide to ret
 completely different instance, although it is really not recommended (doing so might
 impact third-party libraries that depend on the `Context`).
 
+[[context.read]]
 === Reading a `Context`
 
 Once you haved populated a `Context`, you can retrieve that data.

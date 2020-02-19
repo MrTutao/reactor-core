@@ -36,7 +36,7 @@ import reactor.util.context.Context;
  *
  * @see <a href="https://github.com/reactor/reactive-streams-commons">Reactive-Streams-Commons</a>
  */
-final class FluxHandleFuseable<T, R> extends FluxOperator<T, R> implements Fuseable {
+final class FluxHandleFuseable<T, R> extends InternalFluxOperator<T, R> implements Fuseable {
 
 	final BiConsumer<? super T, SynchronousSink<R>> handler;
 
@@ -55,15 +55,13 @@ final class FluxHandleFuseable<T, R> extends FluxOperator<T, R> implements Fusea
 	}
 
 	@Override
-	@SuppressWarnings("unchecked")
-	public void subscribe(CoreSubscriber<? super R> actual) {
+	public CoreSubscriber<? super T> subscribeOrReturn(CoreSubscriber<? super R> actual) {
 		if (actual instanceof ConditionalSubscriber) {
-
+			@SuppressWarnings("unchecked")
 			ConditionalSubscriber<? super R> cs = (ConditionalSubscriber<? super R>) actual;
-			source.subscribe(new HandleFuseableConditionalSubscriber<>(cs, handler));
-			return;
+			return new HandleFuseableConditionalSubscriber<>(cs, handler);
 		}
-		source.subscribe(new HandleFuseableSubscriber<>(actual, handler));
+		return new HandleFuseableSubscriber<>(actual, handler);
 	}
 
 	static final class HandleFuseableSubscriber<T, R>
@@ -266,9 +264,9 @@ final class FluxHandleFuseable<T, R> extends FluxOperator<T, R> implements Fusea
 							handler.accept(v, this);
 						}
 						catch (Throwable error){
-							Throwable e_ = Operators.onNextPollError(v, error, actual.currentContext());
+							RuntimeException e_ = Operators.onNextPollError(v, error, actual.currentContext());
 							if (e_ != null) {
-								throw Exceptions.propagate(e_);
+								throw e_;
 							}
 							else {
 								reset();
@@ -279,10 +277,10 @@ final class FluxHandleFuseable<T, R> extends FluxOperator<T, R> implements Fusea
 						data = null;
 						if (stop) {
 							if (error != null) {
-								Throwable e_ = Operators.onNextPollError(v, error, actual.currentContext());
+								RuntimeException e_ = Operators.onNextPollError(v, error, actual.currentContext());
 								if (e_ != null) {
 									done = true; //set done because we throw or go through `actual` directly
-									throw Exceptions.propagate(e_);
+									throw e_;
 								}
 								//else continue
 							}
@@ -315,9 +313,9 @@ final class FluxHandleFuseable<T, R> extends FluxOperator<T, R> implements Fusea
 							handler.accept(v, this);
 						}
 						catch (Throwable error){
-							Throwable e_ = Operators.onNextPollError(v, error, actual.currentContext());
+							RuntimeException e_ = Operators.onNextPollError(v, error, actual.currentContext());
 							if (e_ != null) {
-								throw Exceptions.propagate(e_);
+								throw e_;
 							}
 							else {
 								reset();
@@ -328,10 +326,10 @@ final class FluxHandleFuseable<T, R> extends FluxOperator<T, R> implements Fusea
 						data = null;
 						if (stop) {
 							if (error != null) {
-								Throwable e_ = Operators.onNextPollError(v, error, actual.currentContext());
+								RuntimeException e_ = Operators.onNextPollError(v, error, actual.currentContext());
 								if (e_ != null) {
 									done = true; //set done because we throw or go through `actual` directly
-									throw Exceptions.propagate(e_);
+									throw e_;
 								}
 								else {
 									reset();
@@ -653,9 +651,9 @@ final class FluxHandleFuseable<T, R> extends FluxOperator<T, R> implements Fusea
 							handler.accept(v, this);
 						}
 						catch (Throwable error){
-							Throwable e_ = Operators.onNextPollError(v, error, actual.currentContext());
+							RuntimeException e_ = Operators.onNextPollError(v, error, actual.currentContext());
 							if (e_ != null) {
-								throw Exceptions.propagate(e_);
+								throw e_;
 							}
 							else {
 								reset();
@@ -705,9 +703,9 @@ final class FluxHandleFuseable<T, R> extends FluxOperator<T, R> implements Fusea
 							handler.accept(v, this);
 						}
 						catch (Throwable error){
-							Throwable e_ = Operators.onNextPollError(v, error, actual.currentContext());
+							RuntimeException e_ = Operators.onNextPollError(v, error, actual.currentContext());
 							if (e_ != null) {
-								throw Exceptions.propagate(e_);
+								throw e_;
 							}
 							else {
 								reset();
@@ -719,9 +717,9 @@ final class FluxHandleFuseable<T, R> extends FluxOperator<T, R> implements Fusea
 						if (stop) {
 							done = true; //set done because we throw or go through `actual` directly
 							if (error != null) {
-								Throwable e_ = Operators.onNextPollError(v, error, actual.currentContext());
+								RuntimeException e_ = Operators.onNextPollError(v, error, actual.currentContext());
 								if (e_ != null) {
-									throw Exceptions.propagate(e_);
+									throw e_;
 								}
 								else{
 									reset();

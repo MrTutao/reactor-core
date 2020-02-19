@@ -15,52 +15,74 @@
  */
 package reactor.util.context;
 
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
+import java.util.AbstractMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.NoSuchElementException;
 import java.util.Objects;
-import java.util.function.Function;
-import java.util.stream.Collectors;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import reactor.util.annotation.Nullable;
 
 @SuppressWarnings("unchecked")
-final class ContextN extends HashMap<Object, Object>
-		implements Context, Function<Entry<Object, Object>, Entry<Object, Object>> {
+final class ContextN extends LinkedHashMap<Object, Object>
+		implements CoreContext, BiConsumer<Object, Object>, Consumer<Entry<Object, Object>> {
 
 	ContextN(Object key1, Object value1, Object key2, Object value2,
 			Object key3, Object value3, Object key4, Object value4,
 			Object key5, Object value5, Object key6, Object value6) {
 		super(6, 1f);
-		super.put(key1, value1);
-		super.put(key2, value2);
-		super.put(key3, value3);
-		super.put(key4, value4);
-		super.put(key5, value5);
-		super.put(key6, value6);
+		//accept below stands in for "inner put"
+		accept(key1, value1);
+		accept(key2, value2);
+		accept(key3, value3);
+		accept(key4, value4);
+		accept(key5, value5);
+		accept(key6, value6);
 	}
 
-	ContextN(Map<Object, Object> map, Object key, Object value) {
-		super(map.size() + 1, 1f);
-		super.putAll(map);
-		super.put(key, value);
+	/**
+	 * Creates a new {@link ContextN} with values from the provided {@link Map}
+	 *
+	 * @param originalToCopy a {@link Map} to populate entries from. MUST NOT contain null keys/values
+	 */
+	ContextN(Map<Object, Object> originalToCopy) {
+		super(Objects.requireNonNull(originalToCopy, "originalToCopy"));
 	}
 
-	ContextN(Map<Object, Object> sourceMap, Map<?, ?> other) {
-		super(sourceMap.size() + other.size(), 1f);
-		super.putAll(sourceMap);
-		super.putAll(other);
+	ContextN(int initialCapacity) {
+		super(initialCapacity, 1.0f);
 	}
 
+	//this performs an inner put to the actual map, and also allows passing `this` directly to
+	//Map#forEach
+	@Override
+	public void accept(Object key, Object value) {
+		super.put(Objects.requireNonNull(key, "key"),
+				Objects.requireNonNull(value, "value"));
+	}
+
+	//this performs an inner put of the entry to the actual map
+	@Override
+	public void accept(Entry<Object, Object> entry) {
+		accept(entry.getKey(), entry.getValue());
+	}
+
+	/**
+	 * Note that this method overrides {@link LinkedHashMap#put(Object, Object)}.
+	 * Consider using {@link #accept(Object, Object)} instead for putting items into the map.
+	 *
+	 * @param key the key to add/update in the new {@link Context}
+	 * @param value the value to associate to the key in the new {@link Context}
+	 */
 	@Override
 	public Context put(Object key, Object value) {
-		Objects.requireNonNull(key, "key");
-		Objects.requireNonNull(key, "value");
-		return new ContextN(this, key, value);
+		ContextN newContext = new ContextN(this);
+		newContext.accept(key, value);
+		return newContext;
 	}
 
 	@Override
@@ -72,6 +94,7 @@ final class ContextN extends HashMap<Object, Object>
 
 		int s = size() - 1;
 		if (s == 5) {
+			@SuppressWarnings("unchecked")
 			Entry<Object, Object>[] arr = new Entry[s];
 			int idx = 0;
 			for (Entry<Object, Object> entry : entrySet()) {
@@ -88,7 +111,7 @@ final class ContextN extends HashMap<Object, Object>
 					arr[4].getKey(), arr[4].getValue());
 		}
 
-		ContextN newInstance = new ContextN(this, Collections.emptyMap());
+		ContextN newInstance = new ContextN(this);
 		newInstance.remove(key);
 		return newInstance;
 	}
@@ -100,8 +123,9 @@ final class ContextN extends HashMap<Object, Object>
 
 	@Override
 	public Object get(Object key) {
-		if (hasKey(key)) {
-			return super.get(key);
+		Object o = super.get(key);
+		if (o != null) {
+			return o;
 		}
 		throw new NoSuchElementException("Context does not contain key: "+key);
 	}
@@ -109,31 +133,58 @@ final class ContextN extends HashMap<Object, Object>
 	@Override
 	@Nullable
 	public Object getOrDefault(Object key, @Nullable Object defaultValue) {
-		return Context.super.getOrDefault(key, defaultValue);
+		Object o = super.get(key);
+		if (o != null) {
+			return o;
+		}
+		return defaultValue;
 	}
 
 	@Override
 	public Stream<Entry<Object, Object>> stream() {
-		return entrySet().stream().map(this);
+		return entrySet().stream().map(AbstractMap.SimpleImmutableEntry::new);
 	}
 
 	@Override
-	public Entry<Object, Object> apply(Entry<Object, Object> o) {
-		return new Context1(o.getKey(), o.getValue());
+	public Context putAllInto(Context base) {
+		if (base instanceof ContextN) {
+			ContextN newContext = new ContextN(base.size() + this.size());
+			newContext.putAll((Map<Object, Object>) base);
+			newContext.putAll((Map<Object, Object>) this);
+			return newContext;
+		}
+
+		Context[] holder = new Context[]{base};
+		forEach((k, v) -> holder[0] = holder[0].put(k, v));
+		return holder[0];
+	}
+
+	@Override
+	public void unsafePutAllInto(ContextN other) {
+		other.putAll((Map<Object, Object>) this);
 	}
 
 	@Override
 	public Context putAll(Context other) {
 		if (other.isEmpty()) return this;
-		if (other instanceof ContextN) return new ContextN(this, ((ContextN) other));
 
-		Map<?, ?> mapOther = other.stream()
-		                          .collect(Collectors.toMap(Entry::getKey, Entry::getValue));
-		return new ContextN(this, mapOther);
+		// slightly less wasteful implementation for non-core context:
+		// only collect the other since we already have a map for this.
+		ContextN newContext = new ContextN(this);
+		if (other instanceof CoreContext) {
+			CoreContext coreContext = (CoreContext) other;
+			coreContext.unsafePutAllInto(newContext);
+		}
+		else {
+			// avoid Collector to reduce the allocations
+			other.stream().sequential().forEach(newContext);
+		}
+
+		return newContext;
 	}
 
 	@Override
 	public String toString() {
-		return "ContextN"+super.toString();
+		return "ContextN" + super.toString();
 	}
 }

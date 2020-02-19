@@ -15,6 +15,7 @@
  */
 package reactor.core.publisher;
 
+import java.util.Arrays;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.function.Supplier;
@@ -47,7 +48,7 @@ import reactor.util.function.Tuples;
  * @param <T> the value type passing through
  * @see <a href="https://github.com/reactor/reactive-streams-commons">https://github.com/reactor/reactive-streams-commons</a>
  */
-final class FluxOnAssembly<T> extends FluxOperator<T, T> implements Fuseable,
+final class FluxOnAssembly<T> extends InternalFluxOperator<T, T> implements Fuseable,
                                                                     AssemblyOp {
 
 	final AssemblySnapshot snapshotStack;
@@ -91,37 +92,27 @@ final class FluxOnAssembly<T> extends FluxOperator<T, T> implements Fuseable,
 	}
 
 	@SuppressWarnings("unchecked")
-	static <T> void subscribe(CoreSubscriber<? super T> s,
-			Flux<? extends T> source,
-			@Nullable AssemblySnapshot snapshotStack) {
-
+	static <T> CoreSubscriber<? super T> wrapSubscriber(CoreSubscriber<? super T> actual,
+														Flux<? extends T> source,
+														@Nullable AssemblySnapshot snapshotStack) {
 		if(snapshotStack != null) {
-			if (s instanceof ConditionalSubscriber) {
-				ConditionalSubscriber<? super T> cs = (ConditionalSubscriber<? super T>) s;
-				source.subscribe(new OnAssemblyConditionalSubscriber<>(cs,
-						snapshotStack,
-						source));
+			if (actual instanceof ConditionalSubscriber) {
+				ConditionalSubscriber<? super T> cs = (ConditionalSubscriber<? super T>) actual;
+				return new OnAssemblyConditionalSubscriber<>(cs, snapshotStack, source);
 			}
 			else {
-				source.subscribe(new OnAssemblySubscriber<>(s, snapshotStack, source));
+				return new OnAssemblySubscriber<>(actual, snapshotStack, source);
 			}
+		}
+		else {
+			return actual;
 		}
 	}
 
 	@Override
 	@SuppressWarnings("unchecked")
-	public void subscribe(CoreSubscriber<? super T> actual) {
-		if(snapshotStack != null) {
-			if (actual instanceof ConditionalSubscriber) {
-				ConditionalSubscriber<? super T> cs = (ConditionalSubscriber<? super T>) actual;
-				source.subscribe(new OnAssemblyConditionalSubscriber<>(cs,
-						snapshotStack,
-						source));
-			}
-			else {
-				source.subscribe(new OnAssemblySubscriber<>(actual, snapshotStack, source));
-			}
-		}
+	public CoreSubscriber<? super T> subscribeOrReturn(CoreSubscriber<? super T> actual) {
+		return wrapSubscriber(actual, source, snapshotStack);
 	}
 
 	/**
@@ -226,6 +217,12 @@ final class FluxOnAssembly<T> extends FluxOperator<T, T> implements Fuseable,
 
 	/**
 	 * The holder for the assembly stacktrace (as its message).
+	 *
+	 * @implNote this package-private exception needs access to package-private enclosing class and methods,
+	 * but it is also detected by {@link Exceptions#isTraceback(Throwable)} via {@link Class#getCanonicalName() reflection}.
+	 * Be sure to update said method in case of a refactoring.
+	 *
+	 * @see Exceptions#isTraceback(Throwable)
 	 */
 	static final class OnAssemblyException extends RuntimeException {
 
@@ -327,6 +324,7 @@ final class FluxOnAssembly<T> extends FluxOperator<T, T> implements Fuseable,
 					sb.append(message);
 					sb.append("\n");
 				}
+				sb.append("Stack trace:");
 				return sb.toString();
 			}
 		}
@@ -434,6 +432,27 @@ final class FluxOnAssembly<T> extends FluxOperator<T, T> implements Fuseable,
 				}
 
 				t = Exceptions.addSuppressed(t, onAssemblyException);
+				final StackTraceElement[] stackTrace = t.getStackTrace();
+				if (stackTrace.length > 0) {
+					StackTraceElement[] newStackTrace = new StackTraceElement[stackTrace.length];
+					int i = 0;
+					for (StackTraceElement stackTraceElement : stackTrace) {
+						String className = stackTraceElement.getClassName();
+
+						if (className.startsWith("reactor.core.publisher.") && className.contains("OnAssembly")) {
+							continue;
+						}
+
+						newStackTrace[i] = stackTraceElement;
+						i++;
+					}
+					newStackTrace = Arrays.copyOf(newStackTrace, i);
+
+					onAssemblyException.setStackTrace(newStackTrace);
+					t.setStackTrace(new StackTraceElement[] {
+							stackTrace[0]
+					});
+				}
 			}
 
 			onAssemblyException.add(parent, snapshotStack);

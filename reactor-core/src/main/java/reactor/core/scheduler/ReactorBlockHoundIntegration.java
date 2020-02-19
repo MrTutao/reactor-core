@@ -19,11 +19,10 @@ import reactor.blockhound.BlockHound;
 import reactor.blockhound.integration.BlockHoundIntegration;
 
 import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.ThreadPoolExecutor;
 
 /**
  * {@link BlockHoundIntegration} with Reactor's scheduling mechanism.
- * Wraps every scheduled {@link Runnable} with a noop {@link Wrapper}, so that it can be
- * detected as an entry point of the non-blocking call stack.
  *
  * WARNING: this class is not intended to be public, but {@link java.util.ServiceLoader}
  * requires it to be so. Public visibility DOES NOT make it part of the public API.
@@ -36,24 +35,12 @@ public final class ReactorBlockHoundIntegration implements BlockHoundIntegration
     public void applyTo(BlockHound.Builder builder) {
         builder.nonBlockingThreadPredicate(current -> current.or(NonBlocking.class::isInstance));
 
-        builder.allowBlockingCallsInside("java.util.concurrent.ScheduledThreadPoolExecutor$DelayedWorkQueue", "offer");
+        builder.allowBlockingCallsInside(ScheduledThreadPoolExecutor.class.getName() + "$DelayedWorkQueue", "offer");
         builder.allowBlockingCallsInside(ScheduledThreadPoolExecutor.class.getName() + "$DelayedWorkQueue", "take");
 
-        Schedulers.onScheduleHook("BlockHound", Wrapper::new);
-        builder.disallowBlockingCallsInside(Wrapper.class.getName(), "run");
-    }
+        // Calls ScheduledFutureTask#cancel that may short park in DelayedWorkQueue#remove for getting a lock
+        builder.allowBlockingCallsInside(SchedulerTask.class.getName(), "dispose");
 
-    static final class Wrapper implements Runnable {
-
-        final Runnable delegate;
-
-        Wrapper(Runnable delegate) {
-            this.delegate = delegate;
-        }
-
-        @Override
-        public void run() {
-            delegate.run();
-        }
+        builder.allowBlockingCallsInside(ThreadPoolExecutor.class.getName(), "processWorkerExit");
     }
 }

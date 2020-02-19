@@ -16,25 +16,52 @@
 
 package reactor.util.context;
 
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 import org.junit.Before;
 import org.junit.Test;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
+import static org.assertj.core.api.Assertions.*;
 import static reactor.util.context.ContextTest.*;
 
 public class ContextNTest {
 
-	Context c;
+	ContextN c;
 
 	@Before
 	public void initContext() {
 		c = new ContextN(1, "A", 2, "B", 3, "C",
 			4, "D", 5, "E", 6, "F");
+	}
+
+	@Test
+	public void constructFromPairsRejectsNulls() {
+		assertThatNullPointerException().isThrownBy(() -> new ContextN(null, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6));
+		assertThatNullPointerException().isThrownBy(() -> new ContextN(1, null, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6));
+		assertThatNullPointerException().isThrownBy(() -> new ContextN(1, 1, null, 2, 3, 3, 4, 4, 5, 5, 6, 6));
+		assertThatNullPointerException().isThrownBy(() -> new ContextN(1, 1, 2, null, 3, 3, 4, 4, 5, 5, 6, 6));
+		assertThatNullPointerException().isThrownBy(() -> new ContextN(1, 1, 2, 2, null, 3, 4, 4, 5, 5, 6, 6));
+		assertThatNullPointerException().isThrownBy(() -> new ContextN(1, 1, 2, 2, 3, null, 4, 4, 5, 5, 6, 6));
+		assertThatNullPointerException().isThrownBy(() -> new ContextN(1, 1, 2, 2, 3, 3, null, 4, 5, 5, 6, 6));
+		assertThatNullPointerException().isThrownBy(() -> new ContextN(1, 1, 2, 2, 3, 3, 4, null, 5, 5, 6, 6));
+		assertThatNullPointerException().isThrownBy(() -> new ContextN(1, 1, 2, 2, 3, 3, 4, 4, null, 5, 6, 6));
+		assertThatNullPointerException().isThrownBy(() -> new ContextN(1, 1, 2, 2, 3, 3, 4, 4, 5, null, 6, 6));
+		assertThatNullPointerException().isThrownBy(() -> new ContextN(1, 1, 2, 2, 3, 3, 4, 4, 5, 5, null, 6));
+		assertThatNullPointerException().isThrownBy(() -> new ContextN(1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, null));
+	}
+
+	@Test
+	public void constructFromPairsConsistent() {
+		ContextN contextN = new ContextN(1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6);
+
+		assertThat(contextN)
+				.containsKeys(1, 2, 3, 4, 5, 6)
+				.containsValues(1, 2, 3, 4 ,5 ,6);
 	}
 
 	@Test
@@ -201,7 +228,7 @@ public class ContextNTest {
 
 		assertThat(c.delete(7)).isSameAs(c);
 
-		assertThat(c).has(size(6)); //sanity check size unchanged for c
+		assertThat(c).hasSize(6); //sanity check size unchanged for c
 	}
 
 	@Test
@@ -289,11 +316,35 @@ public class ContextNTest {
 	}
 
 	@Test
+	public void putAllReplaces() {
+		Context m = Context.of(1, "replaced", "A", 1);
+		Context put = c.putAll(m);
+
+		assertThat(put).isInstanceOf(ContextN.class)
+		               .hasToString("ContextN{1=replaced, 2=B, 3=C, 4=D, 5=E, 6=F, A=1}");
+	}
+
+	@Test
 	public void putAllOfEmpty() {
 		Context m = Context.empty();
 		Context put = c.putAll(m);
 
 		assertThat(put).isSameAs(c);
+	}
+
+	@Test
+	public void putAllForeign() {
+		ForeignContext other = new ForeignContext("someKey", "someValue");
+		Context result = c.putAll(other);
+
+		assertThat(result).isInstanceOf(ContextN.class);
+
+		ContextN resultN = (ContextN) result;
+
+		assertThat(resultN)
+				.isNotSameAs(c)
+				.containsKeys(1, 2, 3, 4, 5, 6, "someKey")
+				.containsValues("A", "B", "C", "D", "E", "F", "someValue");
 	}
 
 	@Test
@@ -320,6 +371,58 @@ public class ContextNTest {
 		assertThat(c.size()).isEqualTo(6);
 
 		assertThat(c.put("sizeGrows", "yes").size()).isEqualTo(7);
+	}
+
+	@Test
+	public void streamIsNotMutable() {
+		c.stream().forEach(e -> { try { e.setValue("REPLACED"); } catch (UnsupportedOperationException ignored) { } });
+
+		assertThat(c).doesNotContainValue("REPLACED");
+	}
+
+	@Test
+	public void streamHasCleanToString() {
+		assertThat(c.toString()).as("toString").isEqualTo("ContextN{1=A, 2=B, 3=C, 4=D, 5=E, 6=F}");
+
+		assertThat(c.stream().map(Objects::toString).collect(Collectors.joining(", ")))
+				.as("stream elements representation")
+				.isEqualTo("1=A, 2=B, 3=C, 4=D, 5=E, 6=F");
+	}
+
+	@Test
+	public void putAllSelfIntoEmpty() {
+		CoreContext initial = new Context0();
+
+		Context result = ((CoreContext) c).putAllInto(initial);
+
+		assertThat(result).isNotSameAs(initial)
+		                  .isNotSameAs(c);
+
+		assertThat(result.stream()).containsExactlyElementsOf(c.stream().collect(Collectors.toList()));
+	}
+
+	@Test
+	public void putAllSelfIntoContextN() {
+		CoreContext initial = new ContextN(1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6);
+		ContextN self = new ContextN("A", 1, "B", 2, "C", 3, "D", 4, "E", 5, "F", 6);
+		Context result = self.putAllInto(initial);
+
+		assertThat(result).isNotSameAs(initial)
+		                  .isNotSameAs(c);
+
+		assertThat(result.stream().map(String::valueOf))
+				.containsExactly("1=1", "2=2", "3=3", "4=4", "5=5", "6=6", "A=1", "B=2", "C=3", "D=4", "E=5", "F=6");
+	}
+
+	@Test
+	public void shouldNotMutateOriginalMap() {
+		Map<Object, Object> original = new HashMap<>();
+		original.put("A", 1);
+		ContextN contextN = new ContextN(original);
+		contextN.accept("A", -1);
+
+		assertThat(original).containsEntry("A", 1);
+		assertThat(contextN).containsEntry("A", -1);
 	}
 
 }

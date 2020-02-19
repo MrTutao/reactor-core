@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2018 Pivotal Software Inc, All Rights Reserved.
+ * Copyright (c) 2011-Present Pivotal Software Inc, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,8 +36,7 @@ import reactor.util.context.Context;
 /**
  * @author Stephane Maldini
  */
-final class FluxBufferTimeout<T, C extends Collection<? super T>> extends FluxOperator<T,
-		C> {
+final class FluxBufferTimeout<T, C extends Collection<? super T>> extends InternalFluxOperator<T, C> {
 
 	final int            batchSize;
 	final Supplier<C>    bufferSupplier;
@@ -63,12 +62,14 @@ final class FluxBufferTimeout<T, C extends Collection<? super T>> extends FluxOp
 	}
 
 	@Override
-	public void subscribe(CoreSubscriber<? super C> actual) {
-		source.subscribe(new BufferTimeoutSubscriber<>(Operators.serialize(actual),
+	public CoreSubscriber<? super T> subscribeOrReturn(CoreSubscriber<? super C> actual) {
+		return new BufferTimeoutSubscriber<>(
+				Operators.serialize(actual),
 				batchSize,
 				timespan,
 				timer.createWorker(),
-				bufferSupplier));
+				bufferSupplier
+		);
 	}
 
 	@Override
@@ -107,6 +108,12 @@ final class FluxBufferTimeout<T, C extends Collection<? super T>> extends FluxOp
 		@SuppressWarnings("rawtypes")
 		static final AtomicLongFieldUpdater<BufferTimeoutSubscriber> REQUESTED =
 				AtomicLongFieldUpdater.newUpdater(BufferTimeoutSubscriber.class, "requested");
+
+		volatile long outstanding;
+
+		@SuppressWarnings("rawtypes")
+		static final AtomicLongFieldUpdater<BufferTimeoutSubscriber> OUTSTANDING =
+				AtomicLongFieldUpdater.newUpdater(BufferTimeoutSubscriber.class, "outstanding");
 
 		volatile int index = 0;
 
@@ -154,6 +161,15 @@ final class FluxBufferTimeout<T, C extends Collection<? super T>> extends FluxOp
 
 		void nextCallback(T value) {
 			synchronized (this) {
+				if (OUTSTANDING.decrementAndGet(this) < 0)
+				{
+					actual.onError(Exceptions.failWithOverflow("Unrequested element received"));
+					Context ctx = actual.currentContext();
+					Operators.onDiscard(value, ctx);
+					Operators.onDiscardMultiple(values, ctx);
+					return;
+				}
+
 				C v = values;
 				if(v == null) {
 					v = Objects.requireNonNull(bufferSupplier.get(),
@@ -288,7 +304,8 @@ final class FluxBufferTimeout<T, C extends Collection<? super T>> extends FluxOp
 					requestMore(Long.MAX_VALUE);
 				}
 				else {
-					requestMore(Operators.multiplyCap(n, batchSize));
+					long requestLimit = Operators.multiplyCap(requested, batchSize);
+					requestMore(requestLimit - outstanding);
 				}
 			}
 		}
@@ -296,6 +313,7 @@ final class FluxBufferTimeout<T, C extends Collection<? super T>> extends FluxOp
 		final void requestMore(long n) {
 			Subscription s = this.subscription;
 			if (s != null) {
+				Operators.addCap(OUTSTANDING, this, n);
 				s.request(n);
 			}
 		}

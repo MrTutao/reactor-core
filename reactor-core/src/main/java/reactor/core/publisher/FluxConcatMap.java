@@ -43,7 +43,7 @@ import static reactor.core.Exceptions.TERMINATED;
  *
  * @see <a href="https://github.com/reactor/reactive-streams-commons">Reactive-Streams-Commons</a>
  */
-final class FluxConcatMap<T, R> extends FluxOperator<T, R> {
+final class FluxConcatMap<T, R> extends InternalFluxOperator<T, R> {
 
 	final Function<? super T, ? extends Publisher<? extends R>> mapper;
 
@@ -112,13 +112,12 @@ final class FluxConcatMap<T, R> extends FluxOperator<T, R> {
 	}
 
 	@Override
-	public void subscribe(CoreSubscriber<? super R> actual) {
-
-		if (FluxFlatMap.trySubscribeScalarMap(source, actual, mapper, false)) {
-			return;
+	public CoreSubscriber<? super T> subscribeOrReturn(CoreSubscriber<? super R> actual) {
+		if (FluxFlatMap.trySubscribeScalarMap(source, actual, mapper, false, true)) {
+			return null;
 		}
 
-		source.subscribe(subscriber(actual, mapper, queueSupplier, prefetch, errorMode));
+		return subscriber(actual, mapper, queueSupplier, prefetch, errorMode);
 	}
 
 	static final class ConcatMapImmediate<T, R>
@@ -766,16 +765,16 @@ final class FluxConcatMap<T, R> extends FluxOperator<T, R> {
 									if (ctx == null) {
 										ctx = actual.currentContext();
 									}
-									Throwable e_ = Operators.onNextPollError(v, e, ctx);
+									Throwable e_ = Operators.onNextError(v, e, ctx);
 									if (e_ == null) {
 										continue;
 									}
 									//now if error mode strategy doesn't apply, let delayError play
-									if (veryEnd && Exceptions.addThrowable(ERROR, this, e)) {
+									if (veryEnd && Exceptions.addThrowable(ERROR, this, e_)) {
 										continue;
 									}
 									else {
-										actual.onError(Operators.onOperatorError(s, e, v, ctx));
+										actual.onError(Operators.onOperatorError(s, e_, v, ctx));
 										return;
 									}
 								}

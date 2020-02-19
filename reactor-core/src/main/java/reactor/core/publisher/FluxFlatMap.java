@@ -44,7 +44,7 @@ import reactor.util.context.Context;
  * @param <R> the result value type
  * @see <a href="https://github.com/reactor/reactive-streams-commons">Reactive-Streams-Commons</a>
  */
-final class FluxFlatMap<T, R> extends FluxOperator<T, R> {
+final class FluxFlatMap<T, R> extends InternalFluxOperator<T, R> {
 
 	final Function<? super T, ? extends Publisher<? extends R>> mapper;
 
@@ -88,18 +88,17 @@ final class FluxFlatMap<T, R> extends FluxOperator<T, R> {
 	}
 
 	@Override
-	public void subscribe(CoreSubscriber<? super R> actual) {
-
-		if (trySubscribeScalarMap(source, actual, mapper, false)) {
-			return;
+	public CoreSubscriber<? super T> subscribeOrReturn(CoreSubscriber<? super R> actual) {
+		if (trySubscribeScalarMap(source, actual, mapper, false, true)) {
+			return null;
 		}
 
-		source.subscribe(new FlatMapMain<>(actual,
+		return new FlatMapMain<>(actual,
 				mapper,
 				delayError,
 				maxConcurrency,
 				mainQueueSupplier,
-				prefetch, innerQueueSupplier));
+				prefetch, innerQueueSupplier);
 	}
 
 	/**
@@ -118,7 +117,8 @@ final class FluxFlatMap<T, R> extends FluxOperator<T, R> {
 	static <T, R> boolean trySubscribeScalarMap(Publisher<? extends T> source,
 			CoreSubscriber<? super R> s,
 			Function<? super T, ? extends Publisher<? extends R>> mapper,
-			boolean fuseableExpected) {
+			boolean fuseableExpected,
+			boolean errorContinueExpected) {
 		if (source instanceof Callable) {
 			T t;
 
@@ -126,7 +126,17 @@ final class FluxFlatMap<T, R> extends FluxOperator<T, R> {
 				t = ((Callable<? extends T>) source).call();
 			}
 			catch (Throwable e) {
-				Operators.error(s, Operators.onOperatorError(e, s.currentContext()));
+				Context ctx = s.currentContext();
+				Throwable e_ = errorContinueExpected ?
+					Operators.onNextError(null, e, ctx) :
+					Operators.onOperatorError(e, ctx);
+				if (e_ != null) {
+					Operators.error(s, e_);
+				}
+				else {
+					//the error was recovered but we know there won't be any more value
+					Operators.complete(s);
+				}
 				return true;
 			}
 
@@ -142,7 +152,17 @@ final class FluxFlatMap<T, R> extends FluxOperator<T, R> {
 						"The mapper returned a null Publisher");
 			}
 			catch (Throwable e) {
-				Operators.error(s, Operators.onOperatorError(null, e, t, s.currentContext()));
+				Context ctx = s.currentContext();
+				Throwable e_ = errorContinueExpected ?
+						Operators.onNextError(t, e, ctx) :
+						Operators.onOperatorError(null, e, t, ctx);
+				if (e_ != null) {
+					Operators.error(s, e_);
+				}
+				else {
+					//the error was recovered but we know there won't be any more value
+					Operators.complete(s);
+				}
 				return true;
 			}
 
@@ -153,7 +173,17 @@ final class FluxFlatMap<T, R> extends FluxOperator<T, R> {
 					v = ((Callable<R>) p).call();
 				}
 				catch (Throwable e) {
-					Operators.error(s, Operators.onOperatorError(null, e, t, s.currentContext()));
+					Context ctx = s.currentContext();
+					Throwable e_ = errorContinueExpected ?
+							Operators.onNextError(t, e, ctx) :
+							Operators.onOperatorError(null, e, t, ctx);
+					if (e_ != null) {
+						Operators.error(s, e_);
+					}
+					else {
+						//the error was recovered but we know there won't be any more value
+						Operators.complete(s);
+					}
 					return true;
 				}
 
@@ -369,13 +399,13 @@ final class FluxFlatMap<T, R> extends FluxOperator<T, R> {
 				catch (Throwable e) {
 					Context ctx = actual.currentContext();
 					//does the strategy apply? if so, short-circuit the delayError. In any case, don't cancel
-					Throwable e_ = Operators.onNextPollError(t, e, ctx);
+					Throwable e_ = Operators.onNextError(t, e, ctx);
 					if (e_ == null) {
-						return;
+						tryEmitScalar(null);
 					}
+					else if (!delayError || !Exceptions.addThrowable(ERROR, this, e_)) {
 					//now if error mode strategy doesn't apply, let delayError play
-					if (!delayError || !Exceptions.addThrowable(ERROR, this, e)) {
-						onError(Operators.onOperatorError(s, e, t, ctx));
+						onError(Operators.onOperatorError(s, e_, t, ctx));
 					}
 					Operators.onDiscard(t, ctx);
 					return;

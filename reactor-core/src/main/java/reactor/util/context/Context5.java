@@ -21,7 +21,7 @@ import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.stream.Stream;
 
-final class Context5 implements Context {
+final class Context5 implements CoreContext {
 
 	final Object key1;
 	final Object value1;
@@ -39,16 +39,18 @@ final class Context5 implements Context {
 			Object key3, Object value3,
 			Object key4, Object value4,
 			Object key5, Object value5) {
-		this.key1 = key1;
-		this.value1 = value1;
-		this.key2 = key2;
-		this.value2 = value2;
-		this.key3 = key3;
-		this.value3 = value3;
-		this.key4 = key4;
-		this.value4 = value4;
-		this.key5 = key5;
-		this.value5 = value5;
+		//TODO merge null check and duplicate check in the util method
+		Context4.checkKeys(key1, key2, key3, key4, key5);
+		this.key1 = Objects.requireNonNull(key1, "key1");
+		this.value1 = Objects.requireNonNull(value1, "value1");
+		this.key2 = Objects.requireNonNull(key2, "key2");
+		this.value2 = Objects.requireNonNull(value2, "value2");
+		this.key3 = Objects.requireNonNull(key3, "key3");
+		this.value3 = Objects.requireNonNull(value3, "value3");
+		this.key4 = Objects.requireNonNull(key4, "key4");
+		this.value4 = Objects.requireNonNull(value4, "value4");
+		this.key5 = Objects.requireNonNull(key5, "key5");
+		this.value5 = Objects.requireNonNull(value5, "value5");
 	}
 
 	@Override
@@ -146,6 +148,25 @@ final class Context5 implements Context {
 				new AbstractMap.SimpleImmutableEntry<>(key3, value3),
 				new AbstractMap.SimpleImmutableEntry<>(key4, value4),
 				new AbstractMap.SimpleImmutableEntry<>(key5, value5));
+	}
+
+	@Override
+	public Context putAllInto(Context base) {
+		return base
+				.put(this.key1, this.value1)
+		        .put(this.key2, this.value2)
+				.put(this.key3, this.value3)
+				.put(this.key4, this.value4)
+				.put(this.key5, this.value5);
+	}
+
+	@Override
+	public void unsafePutAllInto(ContextN other) {
+		other.accept(key1, value1);
+		other.accept(key2, value2);
+		other.accept(key3, value3);
+		other.accept(key4, value4);
+		other.accept(key5, value5);
 	}
 
 	@Override

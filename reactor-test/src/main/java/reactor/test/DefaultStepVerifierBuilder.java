@@ -31,6 +31,7 @@ import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 import java.util.concurrent.atomic.AtomicReference;
@@ -49,6 +50,8 @@ import org.reactivestreams.Publisher;
 import org.reactivestreams.Subscriber;
 import org.reactivestreams.Subscription;
 import reactor.core.CoreSubscriber;
+import reactor.core.Disposable;
+import reactor.core.Disposables;
 import reactor.core.Exceptions;
 import reactor.core.Fuseable;
 import reactor.core.Scannable;
@@ -56,6 +59,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Hooks;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Operators;
+import reactor.core.publisher.ParallelFlux;
 import reactor.core.publisher.Signal;
 import reactor.test.scheduler.VirtualTimeScheduler;
 import reactor.util.Logger;
@@ -180,14 +184,15 @@ final class DefaultStepVerifierBuilder<T>
 		return new DefaultStepVerifierBuilder<>(options, scenarioSupplier);
 	}
 
-	final         SignalEvent<T>                             defaultFirstStep;
-	final         List<Event<T>>                             script;
-	final         MessageFormatter                           messageFormatter;
-	final         long                                       initialRequest;
-	final         Supplier<? extends VirtualTimeScheduler>   vtsLookup;
-	final         Supplier<? extends Publisher<? extends T>> sourceSupplier;
-	private final StepVerifierOptions                        options;
+	final SignalEvent<T>                           defaultFirstStep;
+	final List<Event<T>>                           script;
+	final MessageFormatter                         messageFormatter;
+	final long                                     initialRequest;
+	final Supplier<? extends VirtualTimeScheduler> vtsLookup;
+	final StepVerifierOptions                      options;
 
+	@Nullable
+	Supplier<? extends Publisher<? extends T>> sourceSupplier;
 	long hangCheckRequested;
 	int  requestedFusionMode = -1;
 	int  expectedFusionMode  = -1;
@@ -625,6 +630,29 @@ final class DefaultStepVerifierBuilder<T>
 	}
 
 	@Override
+	public DefaultStepVerifier<T> expectTimeout(Duration duration) {
+		if (sourceSupplier == null) {
+			throw new IllegalStateException("Attempting to call expectTimeout() without a Supplier<Publisher>");
+		}
+		Supplier<? extends Publisher<? extends T>> originalSupplier = sourceSupplier;
+		this.sourceSupplier = () -> Flux.from(originalSupplier.get()).timeout(duration);
+
+		WaitEvent<T> timeout = new WaitEvent<>(duration, "expectTimeout-wait");
+		SignalEvent<T> timeoutVerification = new SignalEvent<>((signal, se) -> {
+			if (signal.isOnError() && signal.getThrowable() instanceof TimeoutException) {
+				return Optional.empty();
+			}
+			else {
+				return messageFormatter.failOptional(se, "expected: timeout(%s); actual: %s",
+						ValueFormatters.DURATION_CONVERTER.apply(duration), signal);
+			}
+		}, "expectTimeout");
+		this.script.add(timeout);
+		this.script.add(timeoutVerification);
+		return build();
+	}
+
+	@Override
 	public Duration verifyError() {
 		return expectError().verify();
 	}
@@ -756,6 +784,11 @@ final class DefaultStepVerifierBuilder<T>
 		}
 
 		@Override
+		public StepVerifier verifyLater() {
+			return toVerifierAndSubscribe();
+		}
+
+		@Override
 		public Assertions verifyThenAssertThat() {
 			return verifyThenAssertThat(defaultVerifyTimeout);
 		}
@@ -785,45 +818,59 @@ final class DefaultStepVerifierBuilder<T>
 		@Override
 		public Duration verify(Duration duration) {
 			Objects.requireNonNull(duration, "duration");
-			if (parent.sourceSupplier != null) {
-				VirtualTimeScheduler vts = null;
-				if (parent.vtsLookup != null) {
-					vtsLock.lock(); //wait for other virtualtime verifies to finish
-					vts = parent.vtsLookup.get();
-					//this works even for the default case where StepVerifier has created
-					// a vts through enable(false), because the CURRENT will already be that vts
-					VirtualTimeScheduler.set(vts);
-				}
-				try {
-					Publisher<? extends T> publisher = parent.sourceSupplier.get();
-					Instant now = Instant.now();
+			Instant now = Instant.now();
 
-					DefaultVerifySubscriber<T> newVerifier = new DefaultVerifySubscriber<>(
-							this.parent.script,
-							this.parent.messageFormatter,
-							this.parent.initialRequest,
-							this.requestedFusionMode,
-							this.expectedFusionMode,
-							this.debugEnabled,
-							this.parent.options.getInitialContext(),
-							vts);
+			DefaultVerifySubscriber<T> newVerifier = toVerifierAndSubscribe();
+			newVerifier.verify(duration);
 
-					publisher.subscribe(newVerifier);
-					newVerifier.verify(duration);
+			return Duration.between(now, Instant.now());
+		}
 
-					return Duration.between(now, Instant.now());
-				}
-				finally {
-					if (vts != null) {
+		DefaultVerifySubscriber<T> toVerifierAndSubscribe() {
+			if (parent.sourceSupplier == null) {
+				throw new IllegalArgumentException("no source to automatically subscribe to for verification");
+			}
+			final VirtualTimeScheduler vts;
+			final Disposable vtsCleanup;
+			if (parent.vtsLookup != null) {
+				vtsLock.lock(); //wait for other virtualtime verifies to finish
+				vts = parent.vtsLookup.get();
+				//this works even for the default case where StepVerifier has created
+				// a vts through enable(false), because the CURRENT will already be that vts
+				VirtualTimeScheduler.set(vts);
+				vtsCleanup = () -> {
 						vts.dispose();
-						//explicitly reset the factory, rather than rely on vts shutdown doing so
-						// because it could have been eagerly shut down in a test.
-						VirtualTimeScheduler.reset();
-						vtsLock.unlock();
-					}
-				}
-			} else {
-				return toSubscriber().verify(duration);
+				//explicitly reset the factory, rather than rely on vts shutdown doing so
+				// because it could have been eagerly shut down in a test.
+				VirtualTimeScheduler.reset();
+				vtsLock.unlock();
+				};
+			}
+			else {
+				vts = null;
+				vtsCleanup = Disposables.disposed();
+			}
+			try {
+				Publisher<? extends T> publisher = parent.sourceSupplier.get();
+
+				DefaultVerifySubscriber<T> newVerifier = new DefaultVerifySubscriber<>(
+						this.parent.script,
+						this.parent.messageFormatter,
+						this.parent.initialRequest,
+						this.requestedFusionMode,
+						this.expectedFusionMode,
+						this.debugEnabled,
+						this.parent.options.getInitialContext(),
+						vts,
+						vtsCleanup);
+
+				publisher.subscribe(newVerifier);
+				return newVerifier;
+			}
+			catch (Throwable error) {
+				//in case the subscription fails, make sure to cleanup the VTS
+				vtsCleanup.dispose();
+				throw error;
 			}
 		}
 
@@ -854,7 +901,8 @@ final class DefaultStepVerifierBuilder<T>
 					this.expectedFusionMode,
 					this.debugEnabled,
 					this.parent.options.getInitialContext(),
-					vts);
+					vts,
+					null);
 		}
 
 	}
@@ -871,6 +919,7 @@ final class DefaultStepVerifierBuilder<T>
 		final int                  expectedFusionMode;
 		final long                 initialRequest;
 		final VirtualTimeScheduler virtualTimeScheduler;
+		final Disposable           postVerifyCleanup;
 
 		Context                       initialContext;
 		@Nullable
@@ -910,7 +959,8 @@ final class DefaultStepVerifierBuilder<T>
 				int expectedFusionMode,
 				boolean debugEnabled,
 				@Nullable Context initialContext,
-				@Nullable VirtualTimeScheduler vts) {
+				@Nullable VirtualTimeScheduler vts,
+				@Nullable Disposable postVerifyCleanup) {
 			this.virtualTimeScheduler = vts;
 			this.requestedFusionMode = requestedFusionMode;
 			this.expectedFusionMode = expectedFusionMode;
@@ -935,6 +985,7 @@ final class DefaultStepVerifierBuilder<T>
 			this.requested = initialRequest;
 			this.initialContext = initialContext == null ? Context.empty() : initialContext;
 			this.messageFormatter = messageFormatter;
+			this.postVerifyCleanup = postVerifyCleanup;
 		}
 
 		@Override
@@ -1166,6 +1217,12 @@ final class DefaultStepVerifierBuilder<T>
 		}
 
 		@Override
+		public StepVerifier verifyLater() {
+			//intentionally NO-OP
+			return this;
+		}
+
+		@Override
 		public Assertions verifyThenAssertThat() {
 			return verifyThenAssertThat(defaultVerifyTimeout);
 		}
@@ -1195,17 +1252,24 @@ final class DefaultStepVerifierBuilder<T>
 
 		@Override
 		public Duration verify(Duration duration) {
-			Objects.requireNonNull(duration, "duration");
-			Instant now = Instant.now();
 			try {
-				pollTaskEventOrComplete(duration);
+				Objects.requireNonNull(duration, "duration");
+				Instant now = Instant.now();
+				try {
+					pollTaskEventOrComplete(duration);
+				}
+				catch (InterruptedException ex) {
+					Thread.currentThread()
+					      .interrupt();
+				}
+				validate();
+				return Duration.between(now, Instant.now());
 			}
-			catch (InterruptedException ex) {
-				Thread.currentThread()
-				      .interrupt();
+			finally {
+				if (postVerifyCleanup != null) {
+					postVerifyCleanup.dispose();
+				}
 			}
-			validate();
-			return Duration.between(now, Instant.now());
 		}
 
 		/**
@@ -1581,8 +1645,12 @@ final class DefaultStepVerifierBuilder<T>
 				try {
 					if (event instanceof SubscriptionTaskEvent) {
 						updateRequested(event);
+						((TaskEvent<T>) event).run(this);
+						serializeDrainAndSubscriptionEvent();
 					}
-					((TaskEvent<T>) event).run(this);
+					else {
+						((TaskEvent<T>) event).run(this);
+					}
 				}
 				catch (Throwable t) {
 					Exceptions.throwIfFatal(t);
