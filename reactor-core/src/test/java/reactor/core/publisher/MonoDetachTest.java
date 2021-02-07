@@ -19,10 +19,14 @@ package reactor.core.publisher;
 import java.lang.ref.WeakReference;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.junit.Assert;
-import org.junit.Test;
+import org.awaitility.Awaitility;
+import org.awaitility.Duration;
+import org.junit.jupiter.api.Test;
 import org.reactivestreams.Subscriber;
+import reactor.core.Scannable;
 import reactor.test.subscriber.AssertSubscriber;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 public class MonoDetachTest {
 
@@ -50,7 +54,7 @@ public class MonoDetachTest {
 		System.gc();
 		Thread.sleep(200);
 
-		Assert.assertNull("Object retained!", wr.get());
+		assertThat(wr.get()).as("Object retained!").isNull();
 
 	}
 
@@ -106,7 +110,7 @@ public class MonoDetachTest {
 		System.gc();
 		Thread.sleep(200);
 
-		Assert.assertNull("Object retained!", wr.get());
+		assertThat(wr.get()).as("Object retained!").isNull();
 	}
 
 	@Test
@@ -124,11 +128,15 @@ public class MonoDetachTest {
 		ts.cancel();
 		o = null;
 
-		System.gc();
-		Thread.sleep(200);
-
-		Assert.assertNull("Object retained!", wr.get());
-
+		Awaitility.with().pollDelay(Duration.ZERO).pollInterval(Duration.ONE_MILLISECOND)
+			.await()
+			.atMost(Duration.FIVE_SECONDS)
+			.untilAsserted(() -> {
+				System.gc();
+				Object garbage = new Object();
+				assertThat(wr.get()).as("Object retained!").isNull();
+				garbage.toString();
+			});
 	}
 
 	@Test
@@ -149,5 +157,12 @@ public class MonoDetachTest {
 		ts.assertValues(1);
 		ts.assertComplete();
 		ts.assertNoError();
+	}
+
+	@Test
+	public void scanOperator(){
+	    MonoDetach<Integer> test = new MonoDetach<>(Mono.just(1));
+
+	    assertThat(test.scan(Scannable.Attr.RUN_STYLE)).isSameAs(Scannable.Attr.RunStyle.SYNC);
 	}
 }

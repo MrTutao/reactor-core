@@ -21,10 +21,11 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.reactivestreams.Subscription;
 
 import reactor.core.Fuseable;
+import reactor.core.Scannable;
 import reactor.test.StepVerifier;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -133,7 +134,7 @@ public class MonoDoFirstTest {
 
 		assertThat(test).as("doFirst not fuseable").isNotInstanceOf(Fuseable.class);
 		StepVerifier.create(test)
-		            .expectSubscriptionMatches(sub -> sub instanceof Operators.EmptySubscription)
+		            .expectSubscription()
 		            .verifyErrorMessage("expected");
 	}
 
@@ -146,7 +147,7 @@ public class MonoDoFirstTest {
 
 		assertThat(test).as("doFirst is fuseable").isInstanceOf(Fuseable.class);
 		StepVerifier.create(test)
-		            .expectSubscriptionMatches(sub -> sub instanceof Operators.EmptySubscription)
+		            .expectSubscription()
 		            .verifyErrorMessage("expected");
 	}
 
@@ -172,6 +173,20 @@ public class MonoDoFirstTest {
 		StepVerifier.create(test).expectNextCount(1).verifyComplete();
 
 		assertThat(subRef.get().getClass()).isEqualTo(FluxMapFuseable.MapFuseableSubscriber.class);
+	}
+
+	@Test
+	public void scanOperator(){
+	    MonoDoFirst<String> test = new MonoDoFirst<>(Mono.just("foo"), () -> {});
+
+		assertThat(test.scan(Scannable.Attr.RUN_STYLE)).isSameAs(Scannable.Attr.RunStyle.SYNC);
+	}
+
+	@Test
+	public void scanFuseableOperator(){
+		MonoDoFirstFuseable<String> test = new MonoDoFirstFuseable<>(Mono.just("foo"), () -> {});
+
+		assertThat(test.scan(Scannable.Attr.RUN_STYLE)).isSameAs(Scannable.Attr.RunStyle.SYNC);
 	}
 
 }

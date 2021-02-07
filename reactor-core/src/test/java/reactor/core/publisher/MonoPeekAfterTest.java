@@ -21,16 +21,20 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.LongAdder;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
+import org.assertj.core.api.Assertions;
+
 import reactor.core.Exceptions;
 import reactor.core.Fuseable;
 import reactor.core.scheduler.Schedulers;
+import reactor.test.util.LoggerUtils;
 import reactor.test.StepVerifier;
+import reactor.test.util.TestLogger;
 import reactor.util.Logger;
 import reactor.util.Loggers;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.fail;
 
 public class MonoPeekAfterTest {
 
@@ -56,8 +60,8 @@ public class MonoPeekAfterTest {
 	                .expectComplete()
 	                .verify();
 
-		assertFalse("unexpected call to onSuccess with null", hasNull.get());
-		assertEquals(1, invoked.intValue());
+		assertThat(hasNull.get()).as("unexpected call to onSuccess with null").isFalse();
+		assertThat(invoked.intValue()).isEqualTo(1);
 	}
 
 	@Test
@@ -81,8 +85,8 @@ public class MonoPeekAfterTest {
 		            .expectComplete()
 		            .verify();
 
-		assertFalse("unexpected call to onSuccess with null", hasNull.get());
-		assertEquals(1, invoked.intValue());
+		assertThat(hasNull.get()).as("unexpected call to onSuccess with null").isFalse();
+		assertThat(invoked.intValue()).isEqualTo(1);
 
 	}
 
@@ -105,8 +109,8 @@ public class MonoPeekAfterTest {
 		            .expectComplete()
 		            .verify();
 
-		assertFalse("unexpected call to onSuccess with null", hasNull.get());
-		assertEquals(1, invoked.intValue());
+		assertThat(hasNull.get()).as("unexpected call to onSuccess with null").isFalse();
+		assertThat(invoked.intValue()).isEqualTo(1);
 	}
 
 	@Test
@@ -129,8 +133,8 @@ public class MonoPeekAfterTest {
 		            .expectComplete()
 		            .verify();
 
-		assertFalse("unexpected call to onSuccess with null", hasNull.get());
-		assertEquals(1, invoked.intValue());
+		assertThat(hasNull.get()).as("unexpected call to onSuccess with null").isFalse();
+		assertThat(invoked.intValue()).isEqualTo(1);
 	}
 
 	@Test
@@ -139,6 +143,7 @@ public class MonoPeekAfterTest {
 		AtomicBoolean completedEmpty = new AtomicBoolean();
 		AtomicReference<Throwable> error = new AtomicReference<>();
 
+		@SuppressWarnings("deprecation") // Because of doOnSuccessOrError, which will be removed in 3.5.0
 		Mono<Integer> mono = Flux
 				.range(1, 10)
 				.reduce((a, b) -> a + b)
@@ -155,9 +160,9 @@ public class MonoPeekAfterTest {
 	                .expectComplete()
 	                .verify();
 
-		assertFalse("unexpected empty completion", completedEmpty.get());
-		assertEquals(1, invoked.intValue());
-		assertEquals("unexpected error", null, error.get());
+		assertThat(completedEmpty.get()).as("unexpected empty completion").isFalse();
+		assertThat(invoked.intValue()).isEqualTo(1);
+		assertThat(error).as("unexpected error").hasValue(null);
 	}
 
 	@Test
@@ -166,6 +171,7 @@ public class MonoPeekAfterTest {
 		AtomicBoolean completedEmpty = new AtomicBoolean();
 		AtomicReference<Throwable> error = new AtomicReference<>();
 
+		@SuppressWarnings("deprecation") // Because of doOnSuccessOrError, which will be removed in 3.5.0
 		Mono<Integer> mono = Flux
 				.range(1, 10)
 				.reduce((a, b) -> a + b)
@@ -183,9 +189,9 @@ public class MonoPeekAfterTest {
 		            .expectComplete()
 		            .verify();
 
-		assertFalse("unexpected empty completion", completedEmpty.get());
-		assertEquals(1, invoked.intValue());
-		assertEquals("unexpected error", null, error.get());
+		assertThat(completedEmpty.get()).as("unexpected empty completion").isFalse();
+		assertThat(invoked.intValue()).isEqualTo(1);
+		assertThat(error).as("unexpected error").hasValue(null);
 	}
 
 	@Test
@@ -194,6 +200,7 @@ public class MonoPeekAfterTest {
 		AtomicBoolean completedEmpty = new AtomicBoolean();
 		AtomicReference<Throwable> error = new AtomicReference<>();
 
+		@SuppressWarnings("deprecation") // Because of doOnSuccessOrError, which will be removed in 3.5.0
 		Mono<Integer> mono = Flux
 				.range(1, 10)
 				.reduce((a, b) -> a + b)
@@ -209,9 +216,9 @@ public class MonoPeekAfterTest {
 		            .expectComplete()
 		            .verify();
 
-		assertFalse("unexpected empty completion", completedEmpty.get());
-		assertEquals(1, invoked.intValue());
-		assertEquals("unexpected error", null, error.get());
+		assertThat(completedEmpty.get()).as("unexpected empty completion").isFalse();
+		assertThat(invoked.intValue()).isEqualTo(1);
+		assertThat(error).as("unexpected error").hasValue(null);
 	}
 
 	@Test
@@ -220,6 +227,7 @@ public class MonoPeekAfterTest {
 		AtomicBoolean completedEmpty = new AtomicBoolean();
 		AtomicReference<Throwable> error = new AtomicReference<>();
 
+		@SuppressWarnings("deprecation") // Because of doOnSuccessOrError, which will be removed in 3.5.0
 		Mono<Integer> mono = Flux
 				.range(1, 10)
 				.reduce((a, b) -> a + b)
@@ -236,9 +244,9 @@ public class MonoPeekAfterTest {
 		            .expectComplete()
 		            .verify();
 
-		assertFalse("unexpected empty completion", completedEmpty.get());
-		assertEquals(1, invoked.intValue());
-		assertEquals("unexpected error", null, error.get());
+		assertThat(completedEmpty.get()).as("unexpected empty completion").isFalse();
+		assertThat(invoked.intValue()).isEqualTo(1);
+		assertThat(error).as("unexpected error").hasValue(null);
 	}
 
 	@Test
@@ -247,6 +255,7 @@ public class MonoPeekAfterTest {
 		AtomicBoolean completedEmpty = new AtomicBoolean();
 		AtomicReference<Throwable> error = new AtomicReference<>();
 
+		@SuppressWarnings("deprecation") // Because of doAfterSuccessOrError, which will be removed in 3.5.0
 		Mono<Integer> mono = Flux
 				.range(1, 10)
 				.reduce((a, b) -> a + b)
@@ -263,9 +272,9 @@ public class MonoPeekAfterTest {
 		            .expectComplete()
 		            .verify();
 
-		assertFalse("unexpected empty completion", completedEmpty.get());
-		assertEquals(1, invoked.intValue());
-		assertEquals("unexpected error", null, error.get());
+		assertThat(completedEmpty.get()).as("unexpected empty completion").isFalse();
+		assertThat(invoked.intValue()).isEqualTo(1);
+		assertThat(error).as("unexpected error").hasValue(null);
 	}
 
 	@Test
@@ -274,6 +283,7 @@ public class MonoPeekAfterTest {
 		AtomicBoolean completedEmpty = new AtomicBoolean();
 		AtomicReference<Throwable> error = new AtomicReference<>();
 
+		@SuppressWarnings("deprecation") // Because of doAfterSuccessOrError, which will be removed in 3.5.0
 		Mono<Integer> mono = Flux
 				.range(1, 10)
 				.reduce((a, b) -> a + b)
@@ -291,9 +301,9 @@ public class MonoPeekAfterTest {
 		            .expectComplete()
 		            .verify();
 
-		assertFalse("unexpected empty completion", completedEmpty.get());
-		assertEquals(1, invoked.intValue());
-		assertEquals("unexpected error", null, error.get());
+		assertThat(completedEmpty.get()).as("unexpected empty completion").isFalse();
+		assertThat(invoked.intValue()).isEqualTo(1);
+		assertThat(error).as("unexpected error").hasValue(null);
 	}
 
 	@Test
@@ -302,6 +312,7 @@ public class MonoPeekAfterTest {
 		AtomicBoolean completedEmpty = new AtomicBoolean();
 		AtomicReference<Throwable> error = new AtomicReference<>();
 
+		@SuppressWarnings("deprecation") // Because of doAfterSuccessOrError, which will be removed in 3.5.0
 		Mono<Integer> mono = Flux
 				.range(1, 10)
 				.reduce((a, b) -> a + b)
@@ -317,9 +328,9 @@ public class MonoPeekAfterTest {
 		            .expectComplete()
 		            .verify();
 
-		assertFalse("unexpected empty completion", completedEmpty.get());
-		assertEquals(1, invoked.intValue());
-		assertEquals("unexpected error", null, error.get());
+		assertThat(completedEmpty.get()).as("unexpected empty completion").isFalse();
+		assertThat(invoked.intValue()).isEqualTo(1);
+		assertThat(error).as("unexpected error").hasValue(null);
 	}
 
 	@Test
@@ -328,6 +339,7 @@ public class MonoPeekAfterTest {
 		AtomicBoolean completedEmpty = new AtomicBoolean();
 		AtomicReference<Throwable> error = new AtomicReference<>();
 
+		@SuppressWarnings("deprecation") // Because of doAfterSuccessOrError, which will be removed in 3.5.0
 		Mono<Integer> mono = Flux
 				.range(1, 10)
 				.reduce((a, b) -> a + b)
@@ -344,9 +356,9 @@ public class MonoPeekAfterTest {
 		            .expectComplete()
 		            .verify();
 
-		assertFalse("unexpected empty completion", completedEmpty.get());
-		assertEquals(1, invoked.intValue());
-		assertEquals("unexpected error", null, error.get());
+		assertThat(completedEmpty.get()).as("unexpected empty completion").isFalse();
+		assertThat(invoked.intValue()).isEqualTo(1);
+		assertThat(error).as("unexpected error").hasValue(null);
 	}
 
 	@Test
@@ -366,7 +378,7 @@ public class MonoPeekAfterTest {
 		            .expectComplete()
 		            .verify();
 
-		assertEquals(1, invoked.intValue());
+		assertThat(invoked.intValue()).isEqualTo(1);
 	}
 
 	@Test
@@ -384,7 +396,7 @@ public class MonoPeekAfterTest {
 		            .expectComplete()
 		            .verify();
 
-		assertEquals(1, invoked.intValue());
+		assertThat(invoked.intValue()).isEqualTo(1);
 	}
 
 	@Test
@@ -403,7 +415,7 @@ public class MonoPeekAfterTest {
 		            .expectComplete()
 		            .verify();
 
-		assertEquals(1, invoked.intValue());
+		assertThat(invoked.intValue()).isEqualTo(1);
 	}
 
 	@Test
@@ -416,65 +428,96 @@ public class MonoPeekAfterTest {
 		                        }))
 	                .expectErrorMessage("foo")
 	                .verify();
-		assertEquals(1, invoked.intValue());
+		assertThat(invoked.intValue()).isEqualTo(1);
 	}
 
 	@Test
 	public void onSuccessOrErrorCallbackFailureInterruptsOnNext() {
 		LongAdder invoked = new LongAdder();
-		StepVerifier.create(Mono.just("foo")
+		@SuppressWarnings("deprecation") // Because of doOnSuccessOrError, which will be removed in 3.5.0
+		Mono<String> mono = Mono.just("foo")
 		                        .doOnSuccessOrError((v, t) -> {
 			                        invoked.increment();
 			                        throw new IllegalArgumentException(v);
-		                        }))
+		                        });
+		StepVerifier.create(mono)
 		            .expectErrorMessage("foo")
 		            .verify();
 
-		assertEquals(1, invoked.intValue());
+		assertThat(invoked.intValue()).isEqualTo(1);
 	}
 
 	@Test
 	public void afterSuccessOrErrorCallbackFailureInterruptsOnNextAndThrows() {
-		LongAdder invoked = new LongAdder();
+		TestLogger testLogger = new TestLogger();
+		LoggerUtils.enableCaptureWith(testLogger);
 		try {
-			StepVerifier.create(Mono.just("foo")
-			                        .doAfterSuccessOrError((v, t) -> {
-				                        invoked.increment();
-				                        throw new IllegalArgumentException(v);
-			                        }))
-			            .expectNext("bar") //irrelevant
-			            .expectErrorMessage("baz") //irrelevant
-			            .verify();
-		}
-		catch (Throwable t) {
-			Throwable e = Exceptions.unwrap(t);
-			assertEquals(IllegalArgumentException.class, e.getClass());
-			assertEquals("foo", e.getMessage());
-		}
+			LongAdder invoked = new LongAdder();
+			try {
+				@SuppressWarnings("deprecation") // Because of doAfterSuccessOrError, which will be removed in 3.5.0
+				Mono<String> mono = Mono.just("foo")
+				                        .doAfterSuccessOrError((v, t) -> {
+					                        invoked.increment();
+					                        throw new IllegalArgumentException(v);
+				                        });
+				StepVerifier.create(mono)
+				            .expectNext("bar") //irrelevant
+				            .expectErrorMessage("baz") //irrelevant
+				            .verify();
+				fail("Exception expected");
+			}
+			catch (Throwable t) {
+				Throwable e = Exceptions.unwrap(t);
+				assertThat(e).isExactlyInstanceOf(AssertionError.class)
+						.hasMessage("expectation \"expectNext(bar)\" failed (expected value: bar; actual value: foo)");
+			}
 
-		assertEquals(1, invoked.intValue());
+			assertThat(invoked.intValue()).isEqualTo(1);
+			Assertions.assertThat(testLogger.getErrContent())
+			          .contains("Operator called default onErrorDropped")
+			          .contains("IllegalArgumentException")
+			          .contains("foo");
+		}
+		finally {
+			LoggerUtils.disableCapture();
+		}
 	}
 
 	@Test
 	public void afterTerminateCallbackFailureInterruptsOnNextAndThrows() {
-		LongAdder invoked = new LongAdder();
+		TestLogger testLogger = new TestLogger();
+		LoggerUtils.enableCaptureWith(testLogger);
 		try {
-			StepVerifier.create(Mono.just("foo")
-			                        .doAfterTerminate(() -> {
-				                        invoked.increment();
-				                        throw new IllegalArgumentException("boom");
-			                        }))
-			            .expectNext("bar") //irrelevant
-			            .expectErrorMessage("baz") //irrelevant
-			            .verify();
-		}
-		catch (Throwable t) {
-			Throwable e = Exceptions.unwrap(t);
-			assertEquals(IllegalArgumentException.class, e.getClass());
-			assertEquals("boom", e.getMessage());
-		}
+			LongAdder invoked = new LongAdder();
+			try {
+				@SuppressWarnings("deprecation") // Because of doAfterSuccessOrError, which will be removed in 3.5.0
+				Mono<String> mono = Mono.just("foo")
+				                        .doAfterSuccessOrError((v, t) -> {
+					                        invoked.increment();
+					                        throw new IllegalArgumentException(v);
+				                        });
+				StepVerifier.create(mono)
+				            .expectNext("bar") //irrelevant
+				            .expectErrorMessage("baz") //irrelevant
+				            .verify();
+				fail("Exception expected");
+			}
+			catch (Throwable t) {
+				Throwable e = Exceptions.unwrap(t);
+				assertThat(e).isExactlyInstanceOf(AssertionError.class)
+						.hasMessage("expectation \"expectNext(bar)\" failed (expected value: bar; actual value: foo)");
+			}
 
-		assertEquals(1, invoked.intValue());
+			assertThat(invoked.intValue()).isEqualTo(1);
+
+			Assertions.assertThat(testLogger.getErrContent())
+			          .contains("Operator called default onErrorDropped")
+			          .contains("foo")
+			          .contains("IllegalArgumentException");
+		}
+		finally {
+			LoggerUtils.disableCapture();
+		}
 	}
 
 	@Test
@@ -487,7 +530,7 @@ public class MonoPeekAfterTest {
 	                .expectErrorMessage("boom")
 	                .verify();
 
-		assertEquals(0, invoked.intValue());
+		assertThat(invoked.intValue()).isEqualTo(0);
 	}
 
 	@Test
@@ -498,18 +541,20 @@ public class MonoPeekAfterTest {
 
 		IllegalArgumentException err = new IllegalArgumentException("boom");
 
-		StepVerifier.create(Mono.<String>error(err)
-		                        .doOnSuccessOrError((v, t) -> {
-			                        invoked.increment();
-			                        value.set(v);
-			                        error.set(t);
-		                        }))
+		@SuppressWarnings("deprecation") // Because of doOnSuccessOrError, which will be removed in 3.5.0
+		Mono<String> test = Mono.<String>error(err)
+				.doOnSuccessOrError((v, t) -> {
+					invoked.increment();
+					value.set(v);
+					error.set(t);
+				});
+		StepVerifier.create(test)
 		            .expectErrorMessage("boom")
 		            .verify();
 
-		assertEquals(1, invoked.intValue());
-		assertEquals(null, value.get());
-		assertEquals(err, error.get());
+		assertThat(invoked.intValue()).isEqualTo(1);
+		assertThat(value).hasValue(null);
+		assertThat(error).hasValue(err);
 	}
 
 	@Test
@@ -520,18 +565,20 @@ public class MonoPeekAfterTest {
 
 		IllegalArgumentException err = new IllegalArgumentException("boom");
 
-		StepVerifier.create(Mono.<String>error(err)
-				.doAfterSuccessOrError((v, t) -> {
-					invoked.increment();
-					value.set(v);
-					error.set(t);
-				}))
+		@SuppressWarnings("deprecation") // Because of doAfterSuccessOrError, which will be removed in 3.5.0
+		Mono<String> mono = Mono.<String>error(err).doAfterSuccessOrError((v, t) -> {
+			invoked.increment();
+			value.set(v);
+			error.set(t);
+		});
+
+		StepVerifier.create(mono)
 		            .expectErrorMessage("boom")
 		            .verify();
 
-		assertEquals(1, invoked.intValue());
-		assertEquals(null, value.get());
-		assertEquals(err, error.get());
+		assertThat(invoked.intValue()).isEqualTo(1);
+		assertThat(value).hasValue(null);
+		assertThat(error).hasValue(err);
 	}
 
 	@Test
@@ -545,7 +592,7 @@ public class MonoPeekAfterTest {
 		            .expectErrorMessage("boom")
 		            .verify();
 
-		assertEquals(1, invoked.intValue());
+		assertThat(invoked.intValue()).isEqualTo(1);
 	}
 
 	@Test
@@ -561,8 +608,8 @@ public class MonoPeekAfterTest {
 		            .expectComplete()
 		            .verify();
 
-		assertEquals(1, invoked.intValue());
-		assertEquals(null, value.get());
+		assertThat(invoked.intValue()).isEqualTo(1);
+		assertThat(value).hasValue(null);
 	}
 
 	@Test
@@ -571,18 +618,20 @@ public class MonoPeekAfterTest {
 		AtomicReference<String> value = new AtomicReference<>();
 		AtomicReference<Throwable> error = new AtomicReference<>();
 
-		StepVerifier.create(Mono.<String>empty()
-				.doOnSuccessOrError((v, t) -> {
-					invoked.increment();
-					value.set(v);
-					error.set(t);
-				}))
+		@SuppressWarnings("deprecation") // Because of doOnSuccessOrError, which will be removed in 3.5.0
+		Mono<String> mono = Mono.<String>empty().doOnSuccessOrError((v, t) -> {
+			invoked.increment();
+			value.set(v);
+			error.set(t);
+		});
+
+		StepVerifier.create(mono)
 		            .expectComplete()
 		            .verify();
 
-		assertEquals(1, invoked.intValue());
-		assertEquals(null, value.get());
-		assertEquals(null, error.get());
+		assertThat(invoked.intValue()).isEqualTo(1);
+		assertThat(value).hasValue(null);
+		assertThat(error).hasValue(null);
 	}
 
 	@Test
@@ -591,18 +640,20 @@ public class MonoPeekAfterTest {
 		AtomicReference<String> value = new AtomicReference<>();
 		AtomicReference<Throwable> error = new AtomicReference<>();
 
-		StepVerifier.create(Mono.<String>empty()
+		@SuppressWarnings("deprecation") // Because of doAfterSuccessOrError, which will be removed in 3.5.0
+		Mono<String> mono = Mono.<String>empty()
 				.doAfterSuccessOrError((v, t) -> {
 					invoked.increment();
 					value.set(v);
 					error.set(t);
-				}))
+				});
+		StepVerifier.create(mono)
 		            .expectComplete()
 		            .verify();
 
-		assertEquals(1, invoked.intValue());
-		assertEquals(null, value.get());
-		assertEquals(null, error.get());
+		assertThat(invoked.intValue()).isEqualTo(1);
+		assertThat(value).hasValue(null);
+		assertThat(error).hasValue(null);
 	}
 
 	@Test
@@ -616,7 +667,7 @@ public class MonoPeekAfterTest {
 		            .expectComplete()
 		            .verify();
 
-		assertEquals(1, invoked.intValue());
+		assertThat(invoked.intValue()).isEqualTo(1);
 	}
 
 	@Test
@@ -644,9 +695,9 @@ public class MonoPeekAfterTest {
 		            .expectComplete()
 		            .verify();
 
-		assertEquals(55, (Object) successInvocation.get());
-		assertEquals(55, (Object) afterTerminateInvocation.get());
-		assertEquals(null, errorInvocation.get());
+		assertThat((Object) successInvocation.get()).isEqualTo(55);
+		assertThat((Object) afterTerminateInvocation.get()).isEqualTo(55);
+		assertThat(errorInvocation).hasValue(null);
 	}
 
 	@Test
@@ -671,9 +722,9 @@ public class MonoPeekAfterTest {
 		            .expectComplete()
 		            .verify();
 
-		assertEquals(55, (Object) successInvocation.get());
-		assertEquals(55, (Object) afterTerminateInvocation.get());
-		assertEquals(null, errorInvocation.get());
+		assertThat((Object) successInvocation.get()).isEqualTo(55);
+		assertThat((Object) afterTerminateInvocation.get()).isEqualTo(55);
+		assertThat(errorInvocation).hasValue(null);
 	}
 
 	@Test
@@ -700,9 +751,9 @@ public class MonoPeekAfterTest {
 		            .expectComplete()
 		            .verify();
 
-		assertEquals(55, (Object) successInvocation.get());
-		assertEquals(null, errorInvocation.get());
-		assertEquals(55, (Object) afterTerminateInvocation.get());
+		assertThat((Object) successInvocation.get()).isEqualTo(55);
+		assertThat(errorInvocation).hasValue(null);
+		assertThat((Object) afterTerminateInvocation.get()).isEqualTo(55);
 	}
 
 	@Test
@@ -720,7 +771,7 @@ public class MonoPeekAfterTest {
 			                      }))
 			    .blockLast();
 
-			assertEquals(10, count.get());
+			assertThat(count).hasValue(10);
 		}
 	}
 

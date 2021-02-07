@@ -33,6 +33,7 @@ import java.util.stream.Stream;
 import org.reactivestreams.Publisher;
 import org.reactivestreams.Subscriber;
 import org.reactivestreams.Subscription;
+
 import reactor.core.CorePublisher;
 import reactor.core.CoreSubscriber;
 import reactor.core.Exceptions;
@@ -43,7 +44,6 @@ import reactor.util.Logger;
 import reactor.util.Loggers;
 import reactor.util.annotation.Nullable;
 import reactor.util.context.Context;
-import reactor.util.function.Tuple2;
 
 import static reactor.core.Fuseable.NONE;
 
@@ -174,6 +174,17 @@ public abstract class Operators {
 	}
 
 	/**
+	 * Check whether the provided {@link Subscription} is the one used to satisfy Spec's §1.9 rule
+	 * before signalling an error.
+	 *
+	 * @param subscription the subscription to test.
+	 * @return true if passed subscription is a subscription created in {@link #reportThrowInSubscribe(CoreSubscriber, Throwable)}.
+	 */
+	public static boolean canAppearAfterOnSubscribe(Subscription subscription) {
+		return subscription == EmptySubscription.FROM_SUBSCRIBE_INSTANCE;
+	}
+
+	/**
 	 * Calls onSubscribe on the target Subscriber with the empty instance followed by a call to onError with the
 	 * supplied error.
 	 *
@@ -183,6 +194,40 @@ public abstract class Operators {
 	public static void error(Subscriber<?> s, Throwable e) {
 		s.onSubscribe(EmptySubscription.INSTANCE);
 		s.onError(e);
+	}
+
+	/**
+	 * Report a {@link Throwable} that was thrown from a call to {@link Publisher#subscribe(Subscriber)},
+	 * attempting to notify the {@link Subscriber} by:
+	 * <ol>
+	 *     <li>providing a special {@link Subscription} via {@link Subscriber#onSubscribe(Subscription)}</li>
+	 *     <li>immediately delivering an {@link Subscriber#onError(Throwable) onError} signal after that</li>
+	 * </ol>
+	 * <p>
+	 * As at that point the subscriber MAY have already been provided with a {@link Subscription}, we
+	 * assume most well formed subscribers will ignore this second {@link Subscription} per Reactive
+	 * Streams rule 1.9. Subscribers that don't usually ignore may recognize this special case and ignore
+	 * it by checking {@link #canAppearAfterOnSubscribe(Subscription)}.
+	 * <p>
+	 * Note that if the {@link Subscriber#onSubscribe(Subscription) onSubscribe} attempt throws,
+	 * {@link Exceptions#throwIfFatal(Throwable) fatal} exceptions are thrown. Other exceptions
+	 * are added as {@link Throwable#addSuppressed(Throwable) suppressed} on the original exception,
+	 * which is then directly notified as an {@link Subscriber#onError(Throwable) onError} signal
+	 * (again assuming that such exceptions occur because a {@link Subscription} is already set).
+	 *
+	 * @param subscriber the {@link Subscriber} being subscribed when the error happened
+	 * @param e the {@link Throwable} that was thrown from {@link Publisher#subscribe(Subscriber)}
+	 * @see #canAppearAfterOnSubscribe(Subscription)
+	 */
+	public static void reportThrowInSubscribe(CoreSubscriber<?> subscriber, Throwable e) {
+		try {
+			subscriber.onSubscribe(EmptySubscription.FROM_SUBSCRIBE_INSTANCE);
+		}
+		catch (Throwable onSubscribeError) {
+			Exceptions.throwIfFatal(onSubscribeError);
+			e.addSuppressed(onSubscribeError);
+		}
+		subscriber.onError(onOperatorError(e, subscriber.currentContext()));
 	}
 
 	/**
@@ -587,7 +632,7 @@ public abstract class Operators {
 		}
 		if (hook == null) {
 			log.error("Operator called default onErrorDropped", e);
-			throw Exceptions.bubble(e);
+			return;
 		}
 		hook.accept(e);
 	}
@@ -828,13 +873,13 @@ public abstract class Operators {
 	 * @return a {@link Throwable} to propagate through onError if the strategy is
 	 * terminal and cancelled the subscription, null if not.
 	 */
-	public static <T> Throwable onNextInnerError(Throwable error, Context context, Subscription subscriptionForCancel) {
+	public static <T> Throwable onNextInnerError(Throwable error, Context context, @Nullable Subscription subscriptionForCancel) {
 		error = unwrapOnNextError(error);
 		OnNextFailureStrategy strategy = onNextErrorStrategy(context);
 		if (strategy.test(error, null)) {
 			//some strategies could still return an exception, eg. if the consumer throws
 			Throwable t = strategy.process(error, null, context);
-			if (t != null) {
+			if (t != null && subscriptionForCancel != null) {
 				subscriptionForCancel.cancel();
 			}
 			return t;
@@ -1241,15 +1286,16 @@ public abstract class Operators {
 	}
 
 	/**
-	 * If the actual {@link CoreSubscriber} is not {@link Fuseable.ConditionalSubscriber},
+	 * If the actual {@link CoreSubscriber} is not {@link reactor.core.Fuseable.ConditionalSubscriber},
 	 * it will apply an adapter which directly maps all
-	 * {@link Fuseable.ConditionalSubscriber#tryOnNext(T)} to {@link CoreSubscriber#onNext(T)}
+	 * {@link reactor.core.Fuseable.ConditionalSubscriber#tryOnNext(Object)} to
+	 * {@link Subscriber#onNext(Object)}
 	 * and always returns true as the result
 	 *
 	 * @param <T> passed subscriber type
 	 *
 	 * @param actual the {@link Subscriber} to adapt
-	 * @return a potentially adapted {@link Fuseable.ConditionalSubscriber}
+	 * @return a potentially adapted {@link reactor.core.Fuseable.ConditionalSubscriber}
 	 */
 	@SuppressWarnings("unchecked")
 	public static <T> Fuseable.ConditionalSubscriber<? super  T> toConditionalSubscriber(CoreSubscriber<? super T> actual) {
@@ -1269,9 +1315,9 @@ public abstract class Operators {
 
 
 
-	static Context multiSubscribersContext(InnerProducer<?>[] subscribers){
-		if (subscribers.length > 0){
-			return subscribers[0].actual().currentContext();
+	static Context multiSubscribersContext(InnerProducer<?>[] multicastInners){
+		if (multicastInners.length > 0){
+			return multicastInners[0].actual().currentContext();
 		}
 		return Context.empty();
 	}
@@ -1302,18 +1348,18 @@ public abstract class Operators {
 		}
 	}
 
-
 	/**
 	 * An unexpected exception is about to be dropped from an operator that has multiple
 	 * subscribers (and thus potentially multiple Context with local onErrorDropped handlers).
 	 *
 	 * @param e the dropped exception
+	 * @param multicastInners the inner targets of the multicast
 	 * @see #onErrorDropped(Throwable, Context)
 	 */
-	static void onErrorDroppedMulticast(Throwable e) {
+	static void onErrorDroppedMulticast(Throwable e, InnerProducer<?>[] multicastInners) {
 		//TODO let this method go through multiple contexts and use their local handlers
 		//if at least one has no local handler, also call onErrorDropped(e, Context.empty())
-		onErrorDropped(e, Context.empty());
+		onErrorDropped(e, multiSubscribersContext(multicastInners));
 	}
 
 	/**
@@ -1325,12 +1371,13 @@ public abstract class Operators {
 	 *
 	 * @param <T> the dropped value type
 	 * @param t the dropped data
+	 * @param multicastInners the inner targets of the multicast
 	 * @see #onNextDropped(Object, Context)
 	 */
-	static <T> void onNextDroppedMulticast(T t) {
+	static <T> void onNextDroppedMulticast(T t,	InnerProducer<?>[] multicastInners) {
 		//TODO let this method go through multiple contexts and use their local handlers
 		//if at least one has no local handler, also call onNextDropped(t, Context.empty())
-		onNextDropped(t, Context.empty());
+		onNextDropped(t, multiSubscribersContext(multicastInners));
 	}
 
 	static <T> long producedCancellable(AtomicLongFieldUpdater<T> updater, T instance, long n) {
@@ -1384,7 +1431,14 @@ public abstract class Operators {
 
 		CorePublisherAdapter(Publisher<T> publisher) {
 			this.publisher = publisher;
-			this.optimizableOperator = publisher instanceof OptimizableOperator ? (OptimizableOperator) publisher : null;
+			if (publisher instanceof OptimizableOperator) {
+				@SuppressWarnings("unchecked")
+				OptimizableOperator<?, T> optimSource = (OptimizableOperator<?, T>) publisher;
+				this.optimizableOperator = optimSource;
+			}
+			else {
+				this.optimizableOperator = null;
+			}
 		}
 
 		@Override
@@ -1413,7 +1467,7 @@ public abstract class Operators {
 		}
 	}
 
-	static final CoreSubscriber<?> EMPTY_SUBSCRIBER = new CoreSubscriber<Object>() {
+	static final Fuseable.ConditionalSubscriber<?> EMPTY_SUBSCRIBER = new Fuseable.ConditionalSubscriber<Object>() {
 		@Override
 		public void onSubscribe(Subscription s) {
 			Throwable e = new IllegalStateException("onSubscribe should not be used");
@@ -1424,6 +1478,13 @@ public abstract class Operators {
 		public void onNext(Object o) {
 			Throwable e = new IllegalStateException("onNext should not be used, got " + o);
 			log.error("Unexpected call to Operators.emptySubscriber()", e);
+		}
+
+		@Override
+		public boolean tryOnNext(Object o) {
+			Throwable e = new IllegalStateException("tryOnNext should not be used, got " + o);
+			log.error("Unexpected call to Operators.emptySubscriber()", e);
+			return false;
 		}
 
 		@Override
@@ -1467,12 +1528,15 @@ public abstract class Operators {
 			// deliberately no op
 		}
 
-
-
+		@Override
+		public String stepName() {
+			return "cancelledSubscription";
+		}
 	}
 
 	final static class EmptySubscription implements QueueSubscription<Object>, Scannable {
 		static final EmptySubscription INSTANCE = new EmptySubscription();
+		static final EmptySubscription FROM_SUBSCRIBE_INSTANCE = new EmptySubscription();
 
 		@Override
 		public void cancel() {
@@ -1517,6 +1581,10 @@ public abstract class Operators {
 			return 0;
 		}
 
+		@Override
+		public String stepName() {
+			return "emptySubscription";
+		}
 	}
 
 	/**
@@ -1526,29 +1594,38 @@ public abstract class Operators {
 	public static class DeferredSubscription
 			implements Subscription, Scannable {
 
-		volatile Subscription s;
+		static final int STATE_CANCELLED = -2;
+		static final int STATE_SUBSCRIBED = -1;
+
+		Subscription s;
 		volatile long requested;
 
 		protected boolean isCancelled(){
-			return s == cancelledSubscription();
+			return requested == STATE_CANCELLED;
 		}
 
 		@Override
 		public void cancel() {
-			Subscription a = s;
-			if (a != cancelledSubscription()) {
-				a = S.getAndSet(this, cancelledSubscription());
-				if (a != null && a != cancelledSubscription()) {
-					a.cancel();
-				}
+			final long state = REQUESTED.getAndSet(this, STATE_CANCELLED);
+			if (state == STATE_CANCELLED) {
+				return;
 			}
+
+			if (state == STATE_SUBSCRIBED) {
+				this.s.cancel();
+			}
+		}
+
+		protected void terminate() {
+			REQUESTED.getAndSet(this, STATE_CANCELLED);
 		}
 
 		@Override
 		@Nullable
 		public Object scanUnsafe(Attr key) {
+			long requested = this.requested; // volatile read to see subscription
 			if (key == Attr.PARENT) return s;
-			if (key == Attr.REQUESTED_FROM_DOWNSTREAM) return requested;
+			if (key == Attr.REQUESTED_FROM_DOWNSTREAM) return requested < 0 ? 0 : requested;
 			if (key == Attr.CANCELLED) return isCancelled();
 
 			return null;
@@ -1556,23 +1633,33 @@ public abstract class Operators {
 
 		@Override
 		public void request(long n) {
-			Subscription a = s;
-			if (a != null) {
-				a.request(n);
-			}
-			else {
-				addCap(REQUESTED, this, n);
+			long r = this.requested; // volatile read beforehand
 
-				a = s;
+			if (r > STATE_SUBSCRIBED) { // works only in case onSubscribe has not happened
+				long u;
+				for (;;) { // normal CAS loop with overflow protection
+					if (r == Long.MAX_VALUE) { // if r == Long.MAX_VALUE then we dont care and we can loose this request just in case of racing
+						return;
+					}
+					u = Operators.addCap(r, n);
+					if (REQUESTED.compareAndSet(this, r, u)) { // Means increment happened before onSubscribe
+						return;
+					}
+					else { // Means increment happened after onSubscribe
+						r = this.requested; // update new state to see what exactly happened (onSubscribe | cancel | requestN)
 
-				if (a != null) {
-					long r = REQUESTED.getAndSet(this, 0L);
-
-					if (r != 0L) {
-						a.request(r);
+						if (r < 0) { // check state (expect -1 | -2 to exit, otherwise repeat)
+							break;
+						}
 					}
 				}
 			}
+
+			if (r == STATE_CANCELLED) { // if canceled, just exit
+				return;
+			}
+
+			this.s.request(n); // if onSubscribe -> subscription exists (and we sure of that because volatile read after volatile write) so we can execute requestN on the subscription
 		}
 
 		/**
@@ -1583,8 +1670,9 @@ public abstract class Operators {
 		 */
 		public final boolean set(Subscription s) {
 			Objects.requireNonNull(s, "s");
+			final long state = this.requested;
 			Subscription a = this.s;
-			if (a == cancelledSubscription()) {
+			if (state == STATE_CANCELLED) {
 				s.cancel();
 				return false;
 			}
@@ -1594,30 +1682,30 @@ public abstract class Operators {
 				return false;
 			}
 
-			if (S.compareAndSet(this, null, s)) {
+			long r;
+			long accumulated = 0;
+			for (;;) {
+				r = this.requested;
 
-				long r = REQUESTED.getAndSet(this, 0L);
-
-				if (r != 0L) {
-					s.request(r);
+				if (r == STATE_CANCELLED || r == STATE_SUBSCRIBED) {
+					s.cancel();
+					return false;
 				}
 
-				return true;
+				this.s = s;
+
+				long toRequest = r - accumulated;
+				if (toRequest > 0) { // if there is something,
+					s.request(toRequest); // then we do a request on the given subscription
+				}
+				accumulated += toRequest;
+
+				if (REQUESTED.compareAndSet(this, r, STATE_SUBSCRIBED)) {
+					return true;
+				}
 			}
-
-			a = this.s;
-
-			if (a != cancelledSubscription()) {
-				s.cancel();
-				reportSubscriptionSet();
-				return false;
-			}
-
-			return false;
 		}
 
-		static final AtomicReferenceFieldUpdater<DeferredSubscription, Subscription> S =
-				AtomicReferenceFieldUpdater.newUpdater(DeferredSubscription.class, Subscription.class, "s");
 		static final AtomicLongFieldUpdater<DeferredSubscription> REQUESTED =
 				AtomicLongFieldUpdater.newUpdater(DeferredSubscription.class, "requested");
 
@@ -1638,8 +1726,13 @@ public abstract class Operators {
 
 		protected final CoreSubscriber<? super O> actual;
 
-		protected O value;
-		volatile int state; //see STATE field updater
+		/**
+		 * The value stored by this Mono operator. Strongly prefer using {@link #setValue(Object)}
+		 * rather than direct writes to this field, when possible.
+		 */
+		@Nullable
+		protected O   value;
+		volatile  int state; //see STATE field updater
 
 		public MonoSubscriber(CoreSubscriber<? super O> actual) {
 			this.actual = actual;
@@ -1676,7 +1769,7 @@ public abstract class Operators {
 		 * Make sure this method is called at most once
 		 * @param v the value to emit
 		 */
-		public final void complete(O v) {
+		public final void complete(@Nullable O v) {
 			for (; ; ) {
 				int state = this.state;
 				if (state == FUSED_EMPTY) {
@@ -1720,7 +1813,7 @@ public abstract class Operators {
 		 *
 		 * @param v the value to discard
 		 */
-		protected void discard(O v) {
+		protected void discard(@Nullable O v) {
 			Operators.onDiscard(v, actual.currentContext());
 		}
 
@@ -1779,6 +1872,9 @@ public abstract class Operators {
 			if (validate(n)) {
 				for (; ; ) {
 					int s = state;
+					if (s == CANCELLED) {
+						return;
+					}
 					// if the any bits 1-31 are set, we are either in fusion mode (FUSED_*)
 					// or request has been called (HAS_REQUEST_*)
 					if ((s & ~NO_REQUEST_HAS_VALUE) != 0) {
@@ -1812,11 +1908,16 @@ public abstract class Operators {
 
 		/**
 		 * Set the value internally, without impacting request tracking state.
+		 * This however discards the provided value when detecting a cancellation.
 		 *
 		 * @param value the new value.
 		 * @see #complete(Object)
 		 */
-		public void setValue(O value) {
+		public void setValue(@Nullable O value) {
+			if (STATE.get(this) == CANCELLED) {
+				discard(value);
+				return;
+			}
 			this.value = value;
 		}
 
@@ -2283,6 +2384,11 @@ public abstract class Operators {
 		@Override
 		public int size() {
 			return isEmpty() ? 0 : 1;
+		}
+
+		@Override
+		public String stepName() {
+			return "scalarSubscription(" + value + ")";
 		}
 
 		@SuppressWarnings("rawtypes")

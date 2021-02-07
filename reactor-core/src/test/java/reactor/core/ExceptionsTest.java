@@ -16,22 +16,19 @@
 package reactor.core;
 
 import java.io.IOException;
-import java.util.List;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
-import java.util.function.Predicate;
 
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import reactor.core.publisher.Mono;
 import reactor.test.util.RaceTestUtils;
+import reactor.util.annotation.Nullable;
 
 import static org.assertj.core.api.Assertions.*;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
 import static reactor.core.Exceptions.*;
 
 /**
@@ -39,22 +36,26 @@ import static reactor.core.Exceptions.*;
  */
 public class ExceptionsTest {
 
+	//used for two addThrowableXxx tests lower in the class. each test receiving a separate instance of ExceptionsTests,
+	//there is no need to reset it.
+	volatile @Nullable Throwable addThrowable;
+	static final AtomicReferenceFieldUpdater<ExceptionsTest, Throwable> ADD_THROWABLE =
+			AtomicReferenceFieldUpdater.newUpdater(ExceptionsTest.class, Throwable.class, "addThrowable");
+
 	@Test
 	public void bubble() throws Exception {
-
 		Throwable t = new Exception("test");
 
 		Throwable w = Exceptions.bubble(Exceptions.propagate(t));
 
-		assertTrue(Exceptions.unwrap(w) == t);
+		assertThat(Exceptions.unwrap(w)).isSameAs(t);
 	}
 
 	@Test
 	public void nullBubble() throws Exception {
-
 		Throwable w = Exceptions.bubble(null);
 
-		assertTrue(Exceptions.unwrap(w) == w);
+		assertThat(Exceptions.unwrap(w)).isSameAs(w);
 	}
 
 	@Test
@@ -95,15 +96,15 @@ public class ExceptionsTest {
 		IllegalStateException overflow1 = Exceptions.failWithOverflow();
 		IllegalStateException overflow2 = Exceptions.failWithOverflow("foo");
 
-		assertTrue(Exceptions.isOverflow(overflow1));
-		assertTrue(Exceptions.isOverflow(overflow2));
+		assertThat(Exceptions.isOverflow(overflow1)).isTrue();
+		assertThat(Exceptions.isOverflow(overflow2)).isTrue();
 	}
 
 	@Test
 	public void allIllegalStateIsntOverflow() {
 		IllegalStateException ise = new IllegalStateException("foo");
 
-		assertFalse(Exceptions.isOverflow(ise));
+		assertThat(Exceptions.isOverflow(ise)).isFalse();
 	}
 
 	@Test
@@ -283,15 +284,6 @@ public class ExceptionsTest {
 	public void unwrapMultipleNotComposite() {
 		RuntimeException e1 = Exceptions.failWithCancel();
 		assertThat(Exceptions.unwrapMultiple(e1)).containsExactly(e1);
-	}
-
-	volatile Throwable addThrowable;
-	static final AtomicReferenceFieldUpdater<ExceptionsTest, Throwable> ADD_THROWABLE =
-			AtomicReferenceFieldUpdater.newUpdater(ExceptionsTest.class, Throwable.class, "addThrowable");
-
-	@Before
-	public void resetAddThrowable() {
-		addThrowable = null;
 	}
 
 	@Test
@@ -503,5 +495,33 @@ public class ExceptionsTest {
 		                      .containsExactlyElementsOf(filteredExceptions)
 		                      .hasSize(2)
 		                      .hasOnlyElementsOfType(IllegalStateException.class);
+	}
+
+	@Test
+	public void isRetryExhausted() {
+		Throwable match1 = Exceptions.retryExhausted("only a message", null);
+		Throwable match2 = Exceptions.retryExhausted("message and cause", new RuntimeException("cause: boom"));
+		Throwable noMatch = new IllegalStateException("Retry exhausted: 10/10");
+
+		assertThat(Exceptions.isRetryExhausted(null)).as("null").isFalse();
+		assertThat(Exceptions.isRetryExhausted(match1)).as("match1").isTrue();
+		assertThat(Exceptions.isRetryExhausted(match2)).as("match2").isTrue();
+		assertThat(Exceptions.isRetryExhausted(noMatch)).as("noMatch").isFalse();
+	}
+
+	@Test
+	public void retryExhaustedMessageWithNoCause() {
+		Throwable retryExhausted = Exceptions.retryExhausted("message with no cause", null);
+
+		assertThat(retryExhausted).hasMessage("message with no cause")
+		                          .hasNoCause();
+	}
+
+	@Test
+	public void retryExhaustedMessageWithCause() {
+		Throwable retryExhausted = Exceptions.retryExhausted("message with cause", new RuntimeException("boom"));
+
+		assertThat(retryExhausted).hasMessage("message with cause")
+		                          .hasCause(new RuntimeException("boom"));
 	}
 }

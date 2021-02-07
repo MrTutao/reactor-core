@@ -18,13 +18,13 @@ package reactor.core.publisher;
 import java.util.NoSuchElementException;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import reactor.test.StepVerifier;
 import reactor.test.StepVerifierOptions;
 import reactor.util.context.Context;
+import reactor.util.context.ContextView;
 
-import static org.hamcrest.Matchers.is;
-import static org.junit.Assert.assertThat;
+import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * @author Stephane Maldini
@@ -40,7 +40,7 @@ public class ContextTests {
 		    .flatMapSequential(d -> Mono.just(d)
 		                                //ctx: test=baseSubscriber_take_range
 		                                //return: old (discarded since inner)
-		                                .subscriberContext(ctx -> {
+		                                .contextWrite(ctx -> {
 			                                if (innerC.get() == null) {
 				                                innerC.set(ctx.put("test", ctx.get("test") + "_innerFlatmap"));
 			                                }
@@ -50,10 +50,10 @@ public class ContextTests {
 		    .take(10)
 		    //ctx: test=baseSubscriber_take
 		    //return: test=baseSubscriber_take_range
-		    .subscriberContext(ctx -> ctx.put("test", ctx.get("test") + "_range"))
+		    .contextWrite(ctx -> ctx.put("test", ctx.get("test") + "_range"))
 		    //ctx: test=baseSubscriber
 		    //return: test=baseSubscriber_take
-		    .subscriberContext(ctx -> ctx.put("test", ctx.get("test") + "_take"))
+		    .contextWrite(ctx -> ctx.put("test", ctx.get("test") + "_take"))
 		    .log()
 		    .subscribe(new BaseSubscriber<Integer>() {
 			    @Override
@@ -63,8 +63,7 @@ public class ContextTests {
 			    }
 		    });
 
-		assertThat(innerC.get()
-		                 .get("test"), is("baseSubscriber_take_range_innerFlatmap"));
+		assertThat(innerC.get().getOrDefault("test", "defaultUnexpected")).isEqualTo("baseSubscriber_take_range_innerFlatmap");
 	}
 
 	@Test
@@ -75,7 +74,7 @@ public class ContextTests {
 		    .log()
 		    .flatMapSequential(d ->
 				    Mono.just(d)
-				        .subscriberContext(ctx -> {
+				        .contextWrite(ctx -> {
 					        if (innerC.get() == null) {
 						        innerC.set(""+ ctx.get("test") + ctx.get("test2"));
 					        }
@@ -84,12 +83,12 @@ public class ContextTests {
 				        .log())
 		    .map(d -> d)
 		    .take(10)
-		    .subscriberContext(ctx -> ctx.put("test", "foo"))
-		    .subscriberContext(ctx -> ctx.put("test2", "bar"))
+		    .contextWrite(ctx -> ctx.put("test", "foo"))
+		    .contextWrite(ctx -> ctx.put("test2", "bar"))
 		    .log()
 		    .subscribe();
 
-		assertThat(innerC.get(), is("foobar"));
+		assertThat(innerC).hasValue("foobar");
 	}
 
 	@Test
@@ -101,8 +100,8 @@ public class ContextTests {
 		                        .skip(3)
 		                        .take(3)
 		                        .handle((d, c) -> c.next(c.currentContext().get("test2") + "" + d))
-		                        .subscriberContext(ctx -> ctx.put("test", "foo"))
-		                        .subscriberContext(ctx -> ctx.put("test2", "bar"))
+		                        .contextWrite(ctx -> ctx.put("test", "foo"))
+		                        .contextWrite(ctx -> ctx.put("test2", "bar"))
 		                        .log())
 		            .expectNext("barfoo4")
 		            .expectNext("barfoo5")
@@ -113,12 +112,12 @@ public class ContextTests {
 	@Test
 	public void currentContext() throws InterruptedException {
 		StepVerifier.create(Mono.just("foo")
-		                        .flatMap(d -> Mono.subscriberContext()
+		                        .flatMap(d -> Mono.deferContextual(Mono::just)
 		                                          .map(c -> d + c.get(Integer.class)))
-		                        .subscriberContext(ctx ->
+		                        .contextWrite(ctx ->
 				                        ctx.put(Integer.class, ctx.get(Integer.class) + 1))
 		                        .flatMapMany(Mono::just)
-		                        .subscriberContext(ctx -> ctx.put(Integer.class, 0)))
+		                        .contextWrite(ctx -> ctx.put(Integer.class, 0)))
 		            .expectNext("foo1")
 		            .verifyComplete();
 	}
@@ -126,7 +125,7 @@ public class ContextTests {
 	@Test
 	public void currentContextWithEmpty() throws InterruptedException {
 		StepVerifier.create(Mono.just("foo")
-		                        .flatMap(d -> Mono.subscriberContext()
+		                        .flatMap(d -> Mono.deferContextual(Mono::just)
 		                                          .map(c -> d + c.get(Integer.class))))
 		            .verifyErrorMatches(t -> t instanceof NoSuchElementException
 				            && "Context is empty".equals(t.getMessage()));
@@ -143,8 +142,8 @@ public class ContextTests {
 		                        .skip(3)
 		                        .take(3)
 		                        .handle((d, c) -> c.next(c.currentContext().get("test2") + "" + d))
-		                        .subscriberContext(ctx -> ctx.put("test", "foo"))
-		                        .subscriberContext(ctx -> ctx.put("test2", "bar"))
+		                        .contextWrite(ctx -> ctx.put("test", "foo"))
+		                        .contextWrite(ctx -> ctx.put("test2", "bar"))
 		                        .log())
 		            .expectNext("barfoo4")
 		            .expectNext("barfoo5")
@@ -159,8 +158,8 @@ public class ContextTests {
 		                        .log()
 		                        .handle((d, c) -> c.next(c.currentContext().get("test") + "" + d))
 		                        .handle((d, c) -> c.next(c.currentContext().get("test2") + "" + d))
-		                        .subscriberContext(ctx -> ctx.put("test2", "bar"))
-		                        .subscriberContext(ctx -> ctx.put("test", "foo"))
+		                        .contextWrite(ctx -> ctx.put("test2", "bar"))
+		                        .contextWrite(ctx -> ctx.put("test", "foo"))
 		                        .log())
 		            .expectNext("barfoo1")
 		            .verifyComplete();
@@ -174,8 +173,8 @@ public class ContextTests {
 		                        .log()
 		                        .handle((d, c) -> c.next(c.currentContext().get("test") + "" + d))
 		                        .handle((d, c) -> c.next(c.currentContext().get("test2") + "" + d))
-		                        .subscriberContext(ctx -> ctx.put("test", "foo"))
-		                        .subscriberContext(ctx -> ctx.put("test2", "bar"))
+		                        .contextWrite(ctx -> ctx.put("test", "foo"))
+		                        .contextWrite(ctx -> ctx.put("test2", "bar"))
 		                        .log())
 		            .expectNext("barfoo1")
 		            .verifyComplete();
@@ -185,9 +184,9 @@ public class ContextTests {
 	public void monoSubscriberContextPutsAll() {
 		StepVerifier.create(
 				Mono.just("foo")
-				    .flatMap(v -> Mono.subscriberContext())
-				    .subscriberContext(Context.of("foo", "bar", 1, "baz"))
-					.subscriberContext(Context.of("initial", "value"))
+				    .flatMap(v -> Mono.deferContextual(Mono::just))
+				    .contextWrite(Context.of("foo", "bar", 1, "baz"))
+					.contextWrite(Context.of("initial", "value"))
 		)
 		            .expectNextMatches(c -> c.hasKey("foo") && c.hasKey(1) && c.hasKey("initial"))
 		            .verifyComplete();
@@ -197,9 +196,9 @@ public class ContextTests {
 	public void monoSubscriberContextWithMergedEmpty() {
 		StepVerifier.create(
 				Mono.just("foo")
-				    .flatMap(v -> Mono.subscriberContext())
-				    .subscriberContext(Context.empty())
-				    .subscriberContext(Context.of("initial", "value"))
+				    .flatMap(v -> Mono.deferContextual(Mono::just))
+				    .contextWrite(Context.empty())
+				    .contextWrite(Context.of("initial", "value"))
 		)
 		            .expectNextMatches(c -> c.hasKey("initial"))
 		            .verifyComplete();
@@ -209,11 +208,11 @@ public class ContextTests {
 	public void monoSubscriberContextWithBothEmpty() {
 		StepVerifier.create(
 				Mono.just("foo")
-				    .flatMap(v -> Mono.subscriberContext())
-				    .subscriberContext(Context.empty())
-				    .subscriberContext(Context.empty())
+				    .flatMap(v -> Mono.deferContextual(Mono::just))
+				    .contextWrite(Context.empty())
+				    .contextWrite(Context.empty())
 		)
-		            .expectNextMatches(Context::isEmpty)
+		            .expectNextMatches(ContextView::isEmpty)
 		            .verifyComplete();
 	}
 
@@ -221,9 +220,9 @@ public class ContextTests {
 	public void fluxSubscriberContextPutsAll() {
 		StepVerifier.create(
 				Flux.just("foo")
-				    .flatMap(v -> Mono.subscriberContext())
-				    .subscriberContext(Context.of("foo", "bar", 1, "baz"))
-					.subscriberContext(Context.of("initial", "value"))
+				    .flatMap(v -> Mono.deferContextual(Mono::just))
+				    .contextWrite(Context.of("foo", "bar", 1, "baz"))
+					.contextWrite(Context.of("initial", "value"))
 		)
 		            .expectNextMatches(c -> c.hasKey("foo") && c.hasKey(1) && c.hasKey("initial"))
 		            .verifyComplete();
@@ -233,9 +232,9 @@ public class ContextTests {
 	public void fluxSubscriberContextWithMergedEmpty() {
 		StepVerifier.create(
 				Flux.just("foo")
-				    .flatMap(v -> Mono.subscriberContext())
-				    .subscriberContext(Context.empty())
-				    .subscriberContext(Context.of("initial", "value"))
+				    .flatMap(v -> Mono.deferContextual(Mono::just))
+				    .contextWrite(Context.empty())
+				    .contextWrite(Context.of("initial", "value"))
 		)
 		            .expectNextMatches(c -> c.hasKey("initial"))
 		            .verifyComplete();
@@ -245,11 +244,11 @@ public class ContextTests {
 	public void fluxSubscriberContextWithBothEmpty() {
 		StepVerifier.create(
 				Flux.just("foo")
-				    .flatMap(v -> Mono.subscriberContext())
-				    .subscriberContext(Context.empty())
-				    .subscriberContext(Context.empty())
+				    .flatMap(v -> Mono.deferContextual(Mono::just))
+				    .contextWrite(Context.empty())
+				    .contextWrite(Context.empty())
 		)
-		            .expectNextMatches(Context::isEmpty)
+		            .expectNextMatches(ContextView::isEmpty)
 		            .verifyComplete();
 	}
 
@@ -269,7 +268,7 @@ public class ContextTests {
 	@Test
 	public void contextAccessibleWithEmptySubscriptionAndOperator1() {
 		StepVerifier.create(Flux.empty()
-		                        .subscriberContext(Context.of("a", "b")))
+		                        .contextWrite(Context.of("a", "b")))
 		            .expectAccessibleContext()
 		            .contains("a", "b")
 		            .then()

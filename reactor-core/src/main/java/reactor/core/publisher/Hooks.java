@@ -16,17 +16,14 @@
 
 package reactor.core.publisher;
 
-import java.util.Collection;
-import java.util.Collections;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.Objects;
+import java.util.*;
 import java.util.concurrent.Callable;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
 import org.reactivestreams.Publisher;
+
 import reactor.core.Exceptions;
 import reactor.core.publisher.FluxOnAssembly.AssemblySnapshot;
 import reactor.core.publisher.FluxOnAssembly.MethodReturnSnapshot;
@@ -41,6 +38,31 @@ import reactor.util.context.Context;
  */
 public abstract class Hooks {
 
+    /**
+	 * Utility method to convert a {@link Publisher} to a {@link Flux} without applying {@link Hooks}.
+	 *
+	 * @param publisher the {@link Publisher} to convert to a {@link Flux}
+	 * @param <T> the type of data emitted by the {@link Publisher}
+	 * @return the {@link Publisher} wrapped as a {@link Flux}, or the original if it was a {@link Flux}
+	 */
+	public static <T> Flux<T> convertToFluxBypassingHooks(Publisher<T> publisher) {
+		return Flux.wrap(publisher);
+	}
+
+	/**
+	 * Utility method to convert a {@link Publisher} to a {@link Mono} without applying {@link Hooks}.
+	 * Can optionally perform a "direct" (or unsafe) conversion when the caller is certain the {@link Publisher}
+	 * has {@link Mono} semantics.
+	 *
+	 * @param publisher the {@link Publisher} to convert to a {@link Mono}
+	 * @param enforceMonoContract {@code true} to ensure {@link Mono} semantics (by cancelling on first onNext if source isn't already a {@link Mono}),
+	 * {@code false} to perform a direct conversion (see {@link Mono#fromDirect(Publisher)}).
+	 * @param <T> the type of data emitted by the {@link Publisher}
+	 * @return the {@link Publisher} wrapped as a {@link Mono}, or the original if it was a {@link Mono}
+	 */
+	public static <T> Mono<T> convertToMonoBypassingHooks(Publisher<T> publisher, boolean enforceMonoContract) {
+		return Mono.wrap(publisher, enforceMonoContract);
+	}
 
 
 	/**
@@ -60,6 +82,7 @@ public abstract class Hooks {
 	 * This pointcut function cannot make use of {@link Flux}, {@link Mono} or
 	 * {@link ParallelFlux} APIs as it would lead to a recursive call to the hook: the
 	 * operator calls would effectively invoke onEachOperator from onEachOperator.
+	 * See {@link #convertToFluxBypassingHooks(Publisher)} and {@link #convertToMonoBypassingHooks(Publisher, boolean)}.
 	 *
 	 * @param onEachOperator the sub-hook: a function to intercept each operation call
 	 * (e.g. {@code map (fn)} and {@code map(fn2)} in {@code flux.map(fn).map(fn2).subscribe()})
@@ -91,6 +114,7 @@ public abstract class Hooks {
 	 * This pointcut function cannot make use of {@link Flux}, {@link Mono} or
 	 * {@link ParallelFlux} APIs as it would lead to a recursive call to the hook: the
 	 * operator calls would effectively invoke onEachOperator from onEachOperator.
+	 * See {@link #convertToFluxBypassingHooks(Publisher)} and {@link #convertToMonoBypassingHooks(Publisher, boolean)}.
 	 *
 	 * @param key the key for the sub-hook to add/replace
 	 * @param onEachOperator the sub-hook: a function to intercept each operation call
@@ -179,6 +203,7 @@ public abstract class Hooks {
 	 * This pointcut function cannot make use of {@link Flux}, {@link Mono} or
 	 * {@link ParallelFlux} APIs as it would lead to a recursive call to the hook: the
 	 * operator calls would effectively invoke onEachOperator from onEachOperator.
+	 * See {@link #convertToFluxBypassingHooks(Publisher)} and {@link #convertToMonoBypassingHooks(Publisher, boolean)}.
 	 *
 	 * @param onLastOperator the sub-hook: a function to intercept last operation call
 	 * (e.g. {@code map(fn2)} in {@code flux.map(fn).map(fn2).subscribe()})
@@ -210,6 +235,7 @@ public abstract class Hooks {
 	 * This pointcut function cannot make use of {@link Flux}, {@link Mono} or
 	 * {@link ParallelFlux} APIs as it would lead to a recursive call to the hook: the
 	 * operator calls would effectively invoke onEachOperator from onEachOperator.
+	 * See {@link #convertToFluxBypassingHooks(Publisher)} and {@link #convertToMonoBypassingHooks(Publisher, boolean)}.
 	 *
 	 * @param key the key for the sub-hook to add/replace
 	 * @param onLastOperator the sub-hook: a function to intercept last operation call
@@ -536,6 +562,10 @@ public abstract class Hooks {
 	private static final LinkedHashMap<String, Function<? super Publisher<Object>, ? extends Publisher<Object>>> onLastOperatorHooks;
 	private static final LinkedHashMap<String, BiFunction<? super Throwable, Object, ? extends Throwable>> onOperatorErrorHooks;
 
+	private static final LinkedHashMap<String, Function<Queue<?>, Queue<?>>> QUEUE_WRAPPERS = new LinkedHashMap<>(1);
+
+	private static Function<Queue<?>, Queue<?>> QUEUE_WRAPPER = Function.identity();
+
 	//Immutable views on hook trackers, for testing purpose
 	static final Map<String, Function<? super Publisher<Object>, ? extends Publisher<Object>>> getOnEachOperatorHooks() {
 		return Collections.unmodifiableMap(onEachOperatorHooks);
@@ -578,9 +608,8 @@ public abstract class Hooks {
 	 */
 	static final String KEY_ON_REJECTED_EXECUTION = "reactor.onRejectedExecution.local";
 
-	static boolean GLOBAL_TRACE =
-			Boolean.parseBoolean(System.getProperty("reactor.trace.operatorStacktrace",
-					"false"));
+	static boolean GLOBAL_TRACE = initStaticGlobalTrace();
+
 
 	static boolean DETECT_CONTEXT_LOSS = false;
 
@@ -588,6 +617,12 @@ public abstract class Hooks {
 		onEachOperatorHooks = new LinkedHashMap<>(1);
 		onLastOperatorHooks = new LinkedHashMap<>(1);
 		onOperatorErrorHooks = new LinkedHashMap<>(1);
+	}
+
+	//isolated on static method for testing purpose
+	static boolean initStaticGlobalTrace() {
+		return Boolean.parseBoolean(System.getProperty("reactor.trace.operatorStacktrace",
+				"false"));
 	}
 
 	Hooks() {
@@ -636,5 +671,85 @@ public abstract class Hooks {
 			return new ConnectableFluxOnAssembly<>((ConnectableFlux<T>) publisher, stacktrace);
 		}
 		return new FluxOnAssembly<>((Flux<T>) publisher, stacktrace);
+	}
+
+	/**
+	 * Adds a wrapper for every {@link Queue} used in Reactor.
+	 * Note that it won't affect existing instances of {@link Queue}.
+	 *
+	 * Hint: one may use {@link AbstractQueue} to reduce the number of methods to implement.
+	 *
+	 * @implNote the resulting {@link Queue} MUST NOT change {@link Queue}'s behavior. Only side effects are allowed.
+	 *
+	 * @see #removeQueueWrapper(String)
+	 */
+	public static void addQueueWrapper(String key, Function<Queue<?>, Queue<?>> decorator) {
+		synchronized (QUEUE_WRAPPERS) {
+			QUEUE_WRAPPERS.put(key, decorator);
+			Function<Queue<?>, Queue<?>> newHook = null;
+			for (Function<Queue<?>, Queue<?>> function : QUEUE_WRAPPERS.values()) {
+				if (newHook == null) {
+					newHook = function;
+				}
+				else {
+					newHook = newHook.andThen(function);
+				}
+			}
+			QUEUE_WRAPPER = newHook;
+		}
+	}
+
+	/**
+	 * Removes existing {@link Queue} wrapper by key.
+	 *
+	 * @see #addQueueWrapper(String, Function)
+	 */
+	public static void removeQueueWrapper(String key) {
+		synchronized (QUEUE_WRAPPERS) {
+			QUEUE_WRAPPERS.remove(key);
+			if (QUEUE_WRAPPERS.isEmpty()) {
+				QUEUE_WRAPPER = Function.identity();
+			}
+			else {
+				Function<Queue<?>, Queue<?>> newHook = null;
+				for (Function<Queue<?>, Queue<?>> function : QUEUE_WRAPPERS.values()) {
+					if (newHook == null) {
+						newHook = function;
+					}
+					else {
+						newHook = newHook.andThen(function);
+					}
+				}
+				QUEUE_WRAPPER = newHook;
+			}
+		}
+	}
+
+	/**
+	 * Remove all queue wrappers.
+	 *
+	 * @see #addQueueWrapper(String, Function)
+	 * @see #removeQueueWrapper(String)
+	 */
+	public static void removeQueueWrappers() {
+		synchronized (QUEUE_WRAPPERS) {
+			QUEUE_WRAPPERS.clear();
+			QUEUE_WRAPPER = Function.identity();
+		}
+	}
+
+	/**
+	 * Applies the {@link Queue} wrappers that were previously registered.
+	 * SHOULD NOT change the behavior of the provided {@link Queue}.
+	 *
+	 * @param queue the {@link Queue} to wrap.
+	 * @return the result of applying {@link Queue} wrappers registered with {@link #addQueueWrapper(String, Function)}.
+	 *
+	 * @see #addQueueWrapper(String, Function)
+	 * @see #removeQueueWrapper(String)
+	 */
+	@SuppressWarnings({"unchecked", "rawtypes"})
+	public static <T> Queue<T> wrapQueue(Queue<T> queue) {
+		return (Queue) QUEUE_WRAPPER.apply(queue);
 	}
 }

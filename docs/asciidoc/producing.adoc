@@ -100,7 +100,6 @@ Flux<String> flux = Flux.generate(
       if (i == 10) sink.complete();
       return state; // <3>
     }, (state) -> System.out.println("state: " + state)); // <4>
-}
 ----
 <1> Again, we generate a mutable object as the state.
 <2> We mutate the state here.
@@ -257,7 +256,7 @@ Flux<String> bridge = Flux.create(sink -> {
     });
     sink.onRequest(n -> {
         List<String> messages = myMessageProcessor.getHistory(n); // <1>
-        for(String s : message) {
+        for(String s : messages) {
            sink.next(s); // <2>
         }
     });

@@ -50,15 +50,8 @@ final class FluxSubscribeOn<T> extends InternalFluxOperator<T, T> {
 
 	@Override
 	public CoreSubscriber<? super T> subscribeOrReturn(CoreSubscriber<? super T> actual) {
-		Worker worker;
-
-		try {
-			worker = Objects.requireNonNull(scheduler.createWorker(),
-					"The scheduler returned a null Function");
-		} catch (Throwable e) {
-			Operators.error(actual, Operators.onOperatorError(e, actual.currentContext()));
-			return null;
-		}
+		Worker worker = Objects.requireNonNull(scheduler.createWorker(),
+				"The scheduler returned a null Function");
 
 		SubscribeOnSubscriber<T> parent = new SubscribeOnSubscriber<>(source,
 				actual, worker, requestOnSeparateThread);
@@ -76,8 +69,14 @@ final class FluxSubscribeOn<T> extends InternalFluxOperator<T, T> {
 		return null;
 	}
 
-	static final class SubscribeOnSubscriber<T>
-			implements InnerOperator<T, T>, Runnable {
+	@Override
+	public Object scanUnsafe(Attr key) {
+		if (key == Attr.RUN_ON) return scheduler;
+		if (key == Attr.RUN_STYLE) return Attr.RunStyle.ASYNC;
+		return super.scanUnsafe(key);
+	}
+
+	static final class SubscribeOnSubscriber<T> implements InnerOperator<T, T>, Runnable {
 
 		final CoreSubscriber<? super T> actual;
 
@@ -212,6 +211,8 @@ final class FluxSubscribeOn<T> extends InternalFluxOperator<T, T> {
 			if (key == Attr.PARENT) return s;
 			if (key == Attr.CANCELLED) return s == Operators.cancelledSubscription();
 			if (key == Attr.REQUESTED_FROM_DOWNSTREAM) return requested;
+			if (key == Attr.RUN_ON) return worker;
+			if (key == Attr.RUN_STYLE) return Attr.RunStyle.ASYNC;
 
 			return InnerOperator.super.scanUnsafe(key);
 		}

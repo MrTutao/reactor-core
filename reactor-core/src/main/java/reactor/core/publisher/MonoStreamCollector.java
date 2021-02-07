@@ -51,24 +51,20 @@ final class MonoStreamCollector<T, A, R> extends MonoFromFluxOperator<T, R>
 
 	@Override
 	public CoreSubscriber<? super T> subscribeOrReturn(CoreSubscriber<? super R> actual) {
-		A container;
-		BiConsumer<? super A, ? super T> accumulator;
-		Function<? super A, ? extends R> finisher;
+		A container = collector.supplier()
+		                     .get();
 
-		try {
-			container = collector.supplier()
-			                     .get();
+		BiConsumer<? super A, ? super T>  accumulator = collector.accumulator();
 
-			accumulator = collector.accumulator();
-
-			finisher = collector.finisher();
-		}
-		catch (Throwable ex) {
-			Operators.error(actual, Operators.onOperatorError(ex, actual.currentContext()));
-			return null;
-		}
+		Function<? super A, ? extends R>  finisher = collector.finisher();
 
 		return new StreamCollectorSubscriber<>(actual, container, accumulator, finisher);
+	}
+
+	@Override
+	public Object scanUnsafe(Attr key) {
+		if (key == Attr.RUN_STYLE) return Attr.RunStyle.SYNC;
+		return super.scanUnsafe(key);
 	}
 
 	static final class StreamCollectorSubscriber<T, A, R>
@@ -99,6 +95,7 @@ final class MonoStreamCollector<T, A, R> extends MonoFromFluxOperator<T, R>
 		public Object scanUnsafe(Attr key) {
 			if (key == Attr.TERMINATED) return done;
 			if (key == Attr.PARENT) return s;
+			if (key == Attr.RUN_STYLE) return Attr.RunStyle.SYNC;
 
 			return super.scanUnsafe(key);
 		}
@@ -174,6 +171,10 @@ final class MonoStreamCollector<T, A, R> extends MonoFromFluxOperator<T, R>
 				return;
 			}
 
+			if (r == null) {
+				actual.onError(Operators.onOperatorError(new NullPointerException("Collector returned null"), actual.currentContext()));
+				return;
+			}
 			complete(r);
 		}
 

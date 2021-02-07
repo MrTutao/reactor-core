@@ -22,13 +22,16 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.function.Function;
 import java.util.logging.Level;
 
-import junitparams.JUnitParamsRunner;
-import junitparams.Parameters;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.awaitility.Awaitility;
-import org.junit.Test;
-import org.junit.runner.RunWith;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.Mockito;
 import org.reactivestreams.Publisher;
 import org.reactivestreams.Subscription;
@@ -51,7 +54,6 @@ import reactor.util.function.Tuple2;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
-@RunWith(JUnitParamsRunner.class)
 public class FluxUsingWhenTest {
 
 	@Test
@@ -153,7 +155,7 @@ public class FluxUsingWhenTest {
 		AtomicBoolean commitDone = new AtomicBoolean();
 		AtomicBoolean rollbackDone = new AtomicBoolean();
 
-		TestPublisher<String> testPublisher = TestPublisher.createCold();
+		TestPublisher<String> testPublisher = TestPublisher.createColdNonCompliant(false, TestPublisher.Violation.DEFER_CANCELLATION);
 		testPublisher.next("Resource").error(new IllegalStateException("boom"));
 
 		Flux<String> test = Flux.usingWhen(testPublisher,
@@ -180,7 +182,7 @@ public class FluxUsingWhenTest {
 		AtomicBoolean commitDone = new AtomicBoolean();
 		AtomicBoolean rollbackDone = new AtomicBoolean();
 
-		TestPublisher<String> testPublisher = TestPublisher.createCold();
+		TestPublisher<String> testPublisher = TestPublisher.createColdNonCompliant(false, TestPublisher.Violation.DEFER_CANCELLATION);
 		testPublisher.emit("Resource", "boom");
 
 		Flux<String> test = Flux.usingWhen(testPublisher,
@@ -372,8 +374,8 @@ public class FluxUsingWhenTest {
 		testResource.rollbackProbe.assertWasSubscribed();
 	}
 
-	@Test
-	@Parameters(method = "sources01")
+	@ParameterizedTest
+	@MethodSource("sources01")
 	public void cancelWithHandler(Flux<String> source) {
 		TestResource testResource = new TestResource();
 
@@ -393,8 +395,8 @@ public class FluxUsingWhenTest {
 		testResource.cancelProbe.assertWasSubscribed();
 	}
 
-	@Test
-	@Parameters(method = "sources01")
+	@ParameterizedTest
+	@MethodSource("sources01")
 	public void cancelWithHandlerFailure(Flux<String> source) {
 		TestResource testResource = new TestResource();
 		final TestLogger tl = new TestLogger();
@@ -427,8 +429,8 @@ public class FluxUsingWhenTest {
 				.contains("java.lang.IllegalStateException: cancel error");
 	}
 
-	@Test
-	@Parameters(method = "sources01")
+	@ParameterizedTest
+	@MethodSource("sources01")
 	public void cancelWithHandlerGenerationFailureLogs(Flux<String> source) throws InterruptedException {
 		TestLogger tl = new TestLogger();
 		Loggers.useCustomLoggers(name -> tl);
@@ -458,17 +460,20 @@ public class FluxUsingWhenTest {
 				.contains("java.lang.NullPointerException");
 	}
 
-	@Test
-	@Parameters(method = "sources01")
+	@ParameterizedTest
+	@MethodSource("sources01")
 	@Deprecated
 	public void cancelWithoutHandlerAppliesCommit(Flux<String> source) {
 		TestResource testResource = new TestResource();
 
 		Flux<String> test = Flux
-				.usingWhen(Mono.just(testResource).hide(),
+				.usingWhen(
+						Mono.just(testResource).hide(),
 						tr -> source,
 						TestResource::commit,
-						tr -> tr.rollback(new RuntimeException("placeholder rollback exception")))
+						(tr, e) -> tr.rollback(new RuntimeException("placeholder rollback exception")),
+						TestResource::commit
+				)
 				.take(2);
 
 		StepVerifier.create(test)
@@ -480,8 +485,8 @@ public class FluxUsingWhenTest {
 		testResource.rollbackProbe.assertWasNotSubscribed();
 	}
 
-	@Test
-	@Parameters(method = "sources01")
+	@ParameterizedTest
+	@MethodSource("sources01")
 	@Deprecated
 	public void cancelDefaultHandlerFailure(Flux<String> source) {
 		TestResource testResource = new TestResource();
@@ -489,14 +494,20 @@ public class FluxUsingWhenTest {
 		Loggers.useCustomLoggers(name -> tl);
 
 		try {
-			Flux<String> test = Flux.usingWhen(Mono.just(testResource),
-					tr -> source,
-					r -> r.commit()
-					      //immediate error to trigger the logging within the test
-					      .concatWith(Mono.error(new IllegalStateException("commit error"))),
-					r -> r.rollback(new RuntimeException("placeholder ignored rollback exception"))
-			)
-			                        .take(2);
+			Function<TestResource, Publisher<?>> completeOrCancel = r -> {
+				return r.commit()
+				        //immediate error to trigger the logging within the test
+				        .concatWith(Mono.error(new IllegalStateException("commit error")));
+			};
+			Flux<String> test = Flux
+					.usingWhen(
+							Mono.just(testResource),
+							tr -> source,
+							completeOrCancel,
+							(r, e) -> r.rollback(new RuntimeException("placeholder ignored rollback exception")),
+							completeOrCancel
+					)
+                    .take(2);
 
 			StepVerifier.create(test)
 			            .expectNext("0", "1")
@@ -514,8 +525,8 @@ public class FluxUsingWhenTest {
 				.contains("java.lang.IllegalStateException: commit error");
 	}
 
-	@Test
-	@Parameters(method = "sourcesFullTransaction")
+	@ParameterizedTest
+	@MethodSource("sourcesFullTransaction")
 	public void apiCommit(Flux<String> fullTransaction) {
 		final AtomicReference<TestResource> ref = new AtomicReference<>();
 
@@ -542,8 +553,8 @@ public class FluxUsingWhenTest {
 				.matches(tr -> !tr.rollbackProbe.wasSubscribed(), "no rollback");
 	}
 
-	@Test
-	@Parameters(method = "sourcesFullTransaction")
+	@ParameterizedTest
+	@MethodSource("sourcesFullTransaction")
 	public void apiCommitFailure(Flux<String> fullTransaction) {
 		final AtomicReference<TestResource> ref = new AtomicReference<>();
 
@@ -571,8 +582,8 @@ public class FluxUsingWhenTest {
 				.matches(tr -> !tr.rollbackProbe.wasSubscribed(), "no rollback");
 	}
 
-	@Test
-	@Parameters(method = "sourcesFullTransaction")
+	@ParameterizedTest
+	@MethodSource("sourcesFullTransaction")
 	public void commitGeneratingNull(Flux<String> fullTransaction) {
 		final AtomicReference<TestResource> ref = new AtomicReference<>();
 
@@ -601,8 +612,8 @@ public class FluxUsingWhenTest {
 				.matches(tr -> !tr.rollbackProbe.wasSubscribed(), "no rollback");
 	}
 
-	@Test
-	@Parameters(method = "sourcesTransactionError")
+	@ParameterizedTest
+	@MethodSource("sourcesTransactionError")
 	public void apiRollback(Flux<String> transactionWithError) {
 		final AtomicReference<TestResource> ref = new AtomicReference<>();
 		Flux<String> flux = Flux.usingWhen(Mono.fromCallable(TestResource::new),
@@ -629,8 +640,8 @@ public class FluxUsingWhenTest {
 				.matches(tr -> tr.rollbackProbe.wasSubscribed(), "rollback method used");
 	}
 
-	@Test
-	@Parameters(method = "sourcesTransactionError")
+	@ParameterizedTest
+	@MethodSource("sourcesTransactionError")
 	public void apiRollbackFailure(Flux<String> transactionWithError) {
 		final AtomicReference<TestResource> ref = new AtomicReference<>();
 		Flux<String> flux = Flux.usingWhen(Mono.fromCallable(TestResource::new),
@@ -657,8 +668,8 @@ public class FluxUsingWhenTest {
 				.matches(tr -> tr.rollbackProbe.wasSubscribed(), "rollback method used");
 	}
 
-	@Test
-	@Parameters(method = "sourcesTransactionError")
+	@ParameterizedTest
+	@MethodSource("sourcesTransactionError")
 	public void apiRollbackGeneratingNull(Flux<String> transactionWithError) {
 		final AtomicReference<TestResource> ref = new AtomicReference<>();
 		Flux<String> flux = Flux.usingWhen(Mono.fromCallable(TestResource::new),
@@ -685,8 +696,8 @@ public class FluxUsingWhenTest {
 				.matches(tr -> !tr.rollbackProbe.wasSubscribed(), "rollback method short-circuited");
 	}
 
-	@Test
-	@Parameters(method = "sourcesFullTransaction")
+	@ParameterizedTest
+	@MethodSource("sourcesFullTransaction")
 	public void apiCancel(Flux<String> transactionWithError) {
 		final AtomicReference<TestResource> ref = new AtomicReference<>();
 		Flux<String> flux = Flux.usingWhen(Mono.fromCallable(TestResource::new),
@@ -709,8 +720,8 @@ public class FluxUsingWhenTest {
 				.matches(tr -> tr.cancelProbe.wasSubscribed(), "cancel method used");
 	}
 
-	@Test
-	@Parameters(method = "sourcesFullTransaction")
+	@ParameterizedTest
+	@MethodSource("sourcesFullTransaction")
 	public void apiCancelFailure(Flux<String> transaction) {
 		TestLogger testLogger = new TestLogger();
 		Loggers.useCustomLoggers(s -> testLogger);
@@ -748,8 +759,8 @@ public class FluxUsingWhenTest {
 		}
 	}
 
-	@Test
-	@Parameters(method = "sourcesFullTransaction")
+	@ParameterizedTest
+	@MethodSource("sourcesFullTransaction")
 	public void apiCancelGeneratingNullLogs(Flux<String> transactionWithError) {
 		TestLogger testLogger = new TestLogger();
 		Loggers.useCustomLoggers(s -> testLogger);
@@ -851,15 +862,15 @@ public class FluxUsingWhenTest {
 		assertThat(test).isNotInstanceOf(Fuseable.QueueSubscription.class);
 	}
 
-	@Test
-	@Parameters(method = "sourcesContext")
+	@ParameterizedTest
+	@MethodSource("sourcesContext")
 	public void contextPropagationOnCommit(Mono<String> source) {
 		AtomicReference<String> probeContextValue = new AtomicReference<>();
 		AtomicReference<String> resourceContextValue = new AtomicReference<>();
 
 		TestResource testResource = new TestResource();
 		PublisherProbe<String> probe = PublisherProbe.of(
-				Mono.subscriberContext()
+				Mono.deferContextual(Mono::just)
 				    .map(it -> it.get(String.class))
 				    .doOnNext(probeContextValue::set)
 				    .onErrorReturn("fail")
@@ -867,7 +878,7 @@ public class FluxUsingWhenTest {
 		Mono<String> contextHandler = probe.mono();
 
 		Mono<TestResource> resourceProvider = Mono.just(testResource)
-		                                          .zipWith(Mono.subscriberContext())
+		                                          .zipWith(Mono.deferContextual(Mono::just))
 		                                          .doOnNext(it -> resourceContextValue.set(it.getT2().get(String.class)))
 		                                          .map(Tuple2::getT1);
 
@@ -876,7 +887,7 @@ public class FluxUsingWhenTest {
 				r -> contextHandler,
 				TestResource::rollback,
 				TestResource::cancel)
-		    .subscriberContext(Context.of(String.class, "contextual"))
+		    .contextWrite(Context.of(String.class, "contextual"))
 		    .as(StepVerifier::create)
 		    .expectAccessibleContext().contains(String.class, "contextual")
 		    .then()
@@ -892,15 +903,15 @@ public class FluxUsingWhenTest {
 		assertThat(resourceContextValue).hasValue("contextual");
 	}
 
-	@Test
-	@Parameters(method = "sourcesContextError")
+	@ParameterizedTest
+	@MethodSource("sourcesContextError")
 	public void contextPropagationOnRollback(Mono<String> source) {
 		AtomicReference<String> probeContextValue = new AtomicReference<>();
 		AtomicReference<String> resourceContextValue = new AtomicReference<>();
 
 		TestResource testResource = new TestResource();
 		PublisherProbe<String> probe = PublisherProbe.of(
-				Mono.subscriberContext()
+				Mono.deferContextual(Mono::just)
 				    .map(it -> it.get(String.class))
 				    .doOnNext(probeContextValue::set)
 				    .onErrorReturn("fail")
@@ -908,7 +919,7 @@ public class FluxUsingWhenTest {
 		Mono<String> contextHandler = probe.mono();
 
 		Mono<TestResource> resourceProvider = Mono.just(testResource)
-		                                          .zipWith(Mono.subscriberContext())
+		                                          .zipWith(Mono.deferContextual(Mono::just))
 		                                          .doOnNext(it -> resourceContextValue.set(it.getT2().get(String.class)))
 		                                          .map(Tuple2::getT1);
 
@@ -917,7 +928,7 @@ public class FluxUsingWhenTest {
 				TestResource::commit,
 				(r, err) -> contextHandler,
 				TestResource::cancel)
-		    .subscriberContext(Context.of(String.class, "contextual"))
+		    .contextWrite(Context.of(String.class, "contextual"))
 		    .as(StepVerifier::create)
 		    .expectAccessibleContext().contains(String.class, "contextual")
 		    .then()
@@ -932,13 +943,13 @@ public class FluxUsingWhenTest {
 		assertThat(resourceContextValue).hasValue("contextual");
 	}
 
-	@Test
-	@Parameters(method = "sources01")
+	@ParameterizedTest
+	@MethodSource("sources01")
 	public void contextPropagationOnCancel(Flux<String> source) {
 		TestResource testResource = new TestResource();
 		AtomicReference<Throwable> errorRef = new AtomicReference<>();
 		PublisherProbe<String> probe = PublisherProbe.of(
-				Mono.subscriberContext()
+				Mono.deferContextual(Mono::just)
 				    .map(it -> it.get(String.class))
 				    .doOnError(errorRef::set)
 				    .onErrorReturn("fail")
@@ -950,7 +961,7 @@ public class FluxUsingWhenTest {
 				TestResource::commit,
 				TestResource::rollback,
 				cancel -> cancelHandler)
-		    .subscriberContext(Context.of(String.class, "contextual"))
+		    .contextWrite(Context.of(String.class, "contextual"))
 		    .take(1)
 		    .as(StepVerifier::create)
 		    .expectNextCount(1)
@@ -962,13 +973,13 @@ public class FluxUsingWhenTest {
 		assertThat(errorRef).hasValue(null);
 	}
 
-	@Test
-	@Parameters(method = "sources01")
+	@ParameterizedTest
+	@MethodSource("sources01")
 	public void contextPropagationOnCancelWithNoHandler(Flux<String> source) {
 		TestResource testResource = new TestResource();
 		AtomicReference<Throwable> errorRef = new AtomicReference<>();
 		PublisherProbe<String> probe = PublisherProbe.of(
-				Mono.subscriberContext()
+				Mono.deferContextual(Mono::just)
 				    .map(it -> it.get(String.class))
 				    .doOnError(errorRef::set)
 				    .onErrorReturn("fail")
@@ -980,7 +991,7 @@ public class FluxUsingWhenTest {
 				commit -> cancelHandler,
 				TestResource::rollback,
 				null)
-		    .subscriberContext(Context.of(String.class, "contextual"))
+		    .contextWrite(Context.of(String.class, "contextual"))
 		    .take(1)
 		    .as(StepVerifier::create)
 		    .expectNextCount(1)
@@ -1008,8 +1019,8 @@ public class FluxUsingWhenTest {
 
 			@Override
 			public void onSubscribe(Subscription s) {
-				s.request(1);
 				subscription = s;
+				s.request(1);
 			}
 
 			@Override
@@ -1041,8 +1052,8 @@ public class FluxUsingWhenTest {
 
 			@Override
 			public void onSubscribe(Subscription s) {
-				s.request(1);
 				subscription = s;
+				s.request(1);
 			}
 
 			@Override
@@ -1092,8 +1103,8 @@ public class FluxUsingWhenTest {
 
 			@Override
 			public void onSubscribe(Subscription s) {
-				s.request(1);
 				subscription = s;
+				s.request(1);
 			}
 
 			@Override
@@ -1108,8 +1119,8 @@ public class FluxUsingWhenTest {
 			public void onComplete() {}
 		});
 
-		Thread.sleep(300);
-		assertThat(cleanupCount.sum()).isEqualTo(1000);
+		Awaitility.waitAtMost(500, TimeUnit.MILLISECONDS)
+		          .untilAsserted(() -> assertThat(cleanupCount.sum()).isEqualTo(1000));
 		assertThat(cancelled).as("source cancelled").isTrue();
 	}
 
@@ -1145,8 +1156,8 @@ public class FluxUsingWhenTest {
 
 			@Override
 			public void onSubscribe(Subscription s) {
-				s.request(1);
 				subscription = s;
+				s.request(1);
 			}
 
 			@Override
@@ -1161,8 +1172,8 @@ public class FluxUsingWhenTest {
 			public void onComplete() {}
 		});
 
-		Thread.sleep(300);
-		assertThat(cleanupCount.sum()).isEqualTo(1000);
+		Awaitility.waitAtMost(500, TimeUnit.MILLISECONDS)
+		          .untilAsserted(() -> assertThat(cleanupCount.sum()).isEqualTo(1000));
 		assertThat(cancelled).as("source cancelled").isTrue();
 	}
 
@@ -1191,22 +1202,7 @@ public class FluxUsingWhenTest {
 	public void scanOperator() {
 		FluxUsingWhen<Object, Object> op = new FluxUsingWhen<>(Mono.empty(), Mono::just, Mono::just, (s, err) -> Mono.just(s), Mono::just);
 
-		assertThat(op.scanUnsafe(Attr.ACTUAL))
-				.isSameAs(op.scanUnsafe(Attr.ACTUAL_METADATA))
-				.isSameAs(op.scanUnsafe(Attr.BUFFERED))
-				.isSameAs(op.scanUnsafe(Attr.CAPACITY))
-				.isSameAs(op.scanUnsafe(Attr.CANCELLED))
-				.isSameAs(op.scanUnsafe(Attr.DELAY_ERROR))
-				.isSameAs(op.scanUnsafe(Attr.ERROR))
-				.isSameAs(op.scanUnsafe(Attr.LARGE_BUFFERED))
-				.isSameAs(op.scanUnsafe(Attr.NAME))
-				.isSameAs(op.scanUnsafe(Attr.PARENT))
-				.isSameAs(op.scanUnsafe(Attr.RUN_ON))
-				.isSameAs(op.scanUnsafe(Attr.PREFETCH))
-				.isSameAs(op.scanUnsafe(Attr.REQUESTED_FROM_DOWNSTREAM))
-				.isSameAs(op.scanUnsafe(Attr.TERMINATED))
-				.isSameAs(op.scanUnsafe(Attr.TAGS))
-				.isNull();
+		assertThat(op.scan(Attr.RUN_STYLE)).isSameAs(Attr.RunStyle.SYNC);
 	}
 
 	@Test
@@ -1220,6 +1216,7 @@ public class FluxUsingWhenTest {
 		assertThat(op.scan(Attr.ACTUAL)).as("ACTUAL").isSameAs(actual);
 
 		assertThat(op.scan(Attr.PREFETCH)).as("PREFETCH").isEqualTo(Integer.MAX_VALUE);
+		assertThat(op.scan(Attr.RUN_STYLE)).isSameAs(Attr.RunStyle.SYNC);
 
 		assertThat(op.scan(Attr.TERMINATED)).as("TERMINATED").isFalse();
 		op.resourceProvided = true;
@@ -1239,6 +1236,7 @@ public class FluxUsingWhenTest {
 		assertThat(op.scan(Attr.ACTUAL)).as("ACTUAL")
 		                                .isSameAs(actual)
 		                                .isSameAs(op.actual());
+		assertThat(op.scan(Attr.RUN_STYLE)).isSameAs(Attr.RunStyle.SYNC);
 
 		assertThat(op.scan(Attr.TERMINATED)).as("pre TERMINATED").isFalse();
 		assertThat(op.scan(Attr.CANCELLED)).as("pre CANCELLED").isFalse();
@@ -1262,6 +1260,7 @@ public class FluxUsingWhenTest {
 
 		assertThat(op.scan(Attr.PARENT)).as("PARENT").isSameAs(up);
 		assertThat(op.scan(Attr.ACTUAL)).as("ACTUAL").isSameAs(up.actual);
+		assertThat(op.scan(Attr.RUN_STYLE)).isSameAs(Attr.RunStyle.SYNC);
 
 		assertThat(op.scan(Attr.TERMINATED)).as("TERMINATED before").isFalse();
 
@@ -1288,6 +1287,7 @@ public class FluxUsingWhenTest {
 
 		assertThat(op.scan(Attr.PARENT)).as("PARENT").isSameAs(up);
 		assertThat(op.scan(Attr.ACTUAL)).as("ACTUAL").isSameAs(up.actual);
+		assertThat(op.scan(Attr.RUN_STYLE)).isSameAs(Attr.RunStyle.SYNC);
 
 		assertThat(op.scan(Attr.TERMINATED)).as("TERMINATED before").isFalse();
 
@@ -1313,6 +1313,7 @@ public class FluxUsingWhenTest {
 		assertThat(op.scan(Attr.PARENT)).as("PARENT").isSameAs(up);
 		assertThat(op.scan(Attr.ACTUAL)).as("ACTUAL").isSameAs(up.actual);
 		assertThat(op.scanUnsafe(Attr.PREFETCH)).as("PREFETCH not supported").isNull();
+		assertThat(op.scan(Attr.RUN_STYLE)).isSameAs(Attr.RunStyle.SYNC);
 	}
 
 	// == utility test classes ==
@@ -1420,21 +1421,21 @@ public class FluxUsingWhenTest {
 
 	//unit test parameter providers
 
-	private Object[] sources01() {
+	private static Object[] sources01() {
 		return new Object[] {
 				new Object[] { Flux.interval(Duration.ofMillis(100)).map(String::valueOf) },
 				new Object[] { Flux.range(0, 2).map(String::valueOf) }
 		};
 	}
 
-	private Object[] sourcesFullTransaction() {
+	private static Object[] sourcesFullTransaction() {
 		return new Object[] {
 				new Object[] { Flux.just("Transaction started", "work in transaction", "more work in transaction").hide() },
 				new Object[] { Flux.just("Transaction started", "work in transaction", "more work in transaction") }
 		};
 	}
 
-	private Object[] sourcesTransactionError() {
+	private static Object[] sourcesTransactionError() {
 		return new Object[] {
 				new Object[] { Flux.just("Transaction started", "work in transaction")
 						.concatWith(Mono.error(new IllegalStateException("boom"))) },
@@ -1443,23 +1444,23 @@ public class FluxUsingWhenTest {
 		};
 	}
 
-	private Object[] sourcesContext() {
+	private static Object[] sourcesContext() {
 		return new Object[] {
-				new Object[] { Mono.subscriberContext().map(it -> it.get(String.class)).hide() },
-				new Object[] { Mono.subscriberContext().map(it -> it.get(String.class)) }
+				new Object[] { Mono.deferContextual(Mono::just).map(it -> it.get(String.class)).hide() },
+				new Object[] { Mono.deferContextual(Mono::just).map(it -> it.get(String.class)) }
 		};
 	}
 
-	private Object[] sourcesContextError() {
+	private static Object[] sourcesContextError() {
 		return new Object[] {
 				new Object[] { Mono
-						.subscriberContext()
+						.deferContextual(Mono::just)
 						.map(it -> it.get(String.class))
 						.hide()
 						.map(it -> { throw new IllegalStateException("boom"); })
 				},
 				new Object[] { Mono
-						.subscriberContext()
+						.deferContextual(Mono::just)
 						.map(it -> it.get(String.class))
 						.map(it -> { throw new IllegalStateException("boom"); })
 				}

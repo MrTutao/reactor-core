@@ -13,7 +13,7 @@
 
 Non-Blocking [Reactive Streams](https://www.reactive-streams.org/) Foundation for the JVM both implementing a [Reactive Extensions](https://reactivex.io) inspired API and efficient event streaming support.
 
-The `master` branch is now dedicated to development of the `3.3.x` line.
+Since `3.3.x`, this repository also contains `reactor-tools`, a java agent aimed at helping with debugging of Reactor code.
 
 ## Getting it
    
@@ -22,25 +22,34 @@ The `master` branch is now dedicated to development of the `3.3.x` line.
 With Gradle from repo.spring.io or Maven Central repositories (stable releases only):
 
 ```groovy
-    repositories {
-//      maven { url 'https://repo.spring.io/snapshot' }
-//      maven { url 'https://repo.spring.io/milestone' }
-      mavenCentral()
-    }
+repositories {
+    mavenCentral()
 
-    dependencies {
-      //compile "io.projectreactor:reactor-core:3.3.3.BUILD-SNAPSHOT"
-      //testCompile("io.projectreactor:reactor-test:3.3.3.BUILD-SNAPSHOT")
-      compile "io.projectreactor:reactor-core:3.3.2.RELEASE"
-      testCompile("io.projectreactor:reactor-test:3.3.2.RELEASE")
-    }
+    // Uncomment to get access to Milestones
+    // maven { url "https://repo.spring.io/milestone" }
+
+    // Uncomment to get access to Snapshots
+    // maven { url "https://repo.spring.io/snapshot" }
+}
+
+dependencies {
+    compile "io.projectreactor:reactor-core:3.4.2"
+    testCompile "io.projectreactor:reactor-test:3.4.2"
+
+    // Alternatively, use the following for latest snapshot artifacts in this line
+    // compile "io.projectreactor:reactor-core:3.4.3-SNAPSHOT"
+    // testCompile "io.projectreactor:reactor-test:3.4.3-SNAPSHOT"
+
+    // Optionally, use `reactor-tools` to help debugging reactor code
+    // implementation "io.projectreactor:reactor-tools:3.4.2"
+}
 ```
 
 See the [reference documentation](https://projectreactor.io/docs/core/release/reference/docs/index.html#getting)
 for more information on getting it (eg. using Maven, or on how to get milestones and snapshots).
 
 > **Note about Android support**: Reactor 3 doesn't officially support nor target Android.
-However it should work fine with Android SDK 26 (Android O) and above. See the
+However it should work fine with Android SDK 21 (Android 5.0) and above. See the
 [complete note](https://projectreactor.io/docs/core/release/reference/docs/index.html#prerequisites)
 in the reference guide.
 
@@ -92,7 +101,7 @@ A Reactive Streams Publisher constrained to *ZERO* or *ONE* element with appropr
 - Static factories on Mono allow for deterministic *zero or one* sequence generation from arbitrary callbacks types.
 - Instance methods allows operational building, materialized on each _Mono#subscribe()_ or _Mono#get()_ eventually called.
 
-[<img src="https://raw.githubusercontent.com/reactor/reactor-core/v3.1.3.RELEASE/src/docs/marble/mono.png" width="500">](https://projectreactor.io/docs/core/release/api/reactor/core/publisher/Mono.html)
+[<img src="https://raw.githubusercontent.com/reactor/reactor-core/v3.4.1/reactor-core/src/main/java/reactor/core/publisher/doc-files/marbles/mono.svg" width="500">](https://projectreactor.io/docs/core/release/api/reactor/core/publisher/Mono.html)
 
 Mono in action :
 ```java
@@ -210,4 +219,3 @@ _Powered by [Reactive Streams Commons](https://github.com/reactor/reactive-strea
 _Licensed under [Apache Software License 2.0](www.apache.org/licenses/LICENSE-2.0)_
 
 _Sponsored by [Pivotal](https://pivotal.io)_
-

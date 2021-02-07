@@ -23,10 +23,7 @@ import java.util.Objects;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
-import javax.annotation.concurrent.Immutable;
-
-import org.junit.Test;
-
+import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Signal;
 import reactor.test.ValueFormatters.Extractor;
 import reactor.test.ValueFormatters.ToStringConverter;

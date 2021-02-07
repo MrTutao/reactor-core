@@ -53,15 +53,8 @@ final class MonoPublishMulticast<T, R> extends InternalMonoOperator<T, R> implem
 	public CoreSubscriber<? super T> subscribeOrReturn(CoreSubscriber<? super R> actual) {
 		MonoPublishMulticaster<T> multicast = new MonoPublishMulticaster<>(actual.currentContext());
 
-		Mono<? extends R> out;
-		try {
-			out = Objects.requireNonNull(transform.apply(fromDirect(multicast)),
-					"The transform returned a null Mono");
-		}
-		catch (Throwable ex) {
-			Operators.error(actual, Operators.onOperatorError(ex, actual.currentContext()));
-			return null;
-		}
+		Mono<? extends R> out = Objects.requireNonNull(transform.apply(fromDirect(multicast)),
+				"The transform returned a null Mono");
 
 		if (out instanceof Fuseable) {
 			out.subscribe(new FluxPublishMulticast.CancelFuseableMulticaster<>(actual, multicast));
@@ -71,6 +64,12 @@ final class MonoPublishMulticast<T, R> extends InternalMonoOperator<T, R> implem
 		}
 
 		return multicast;
+	}
+
+	@Override
+	public Object scanUnsafe(Attr key) {
+		if (key == Attr.RUN_STYLE) return Attr.RunStyle.SYNC;
+		return super.scanUnsafe(key);
 	}
 
 	static final class MonoPublishMulticaster<T> extends Mono<T>
@@ -133,6 +132,9 @@ final class MonoPublishMulticast<T, R> extends InternalMonoOperator<T, R> implem
 			}
 			if (key == Attr.BUFFERED) {
 				return value != null ? 1 : 0;
+			}
+			if (key == Attr.RUN_STYLE) {
+			    return Attr.RunStyle.SYNC;
 			}
 
 			return null;
@@ -357,6 +359,9 @@ final class MonoPublishMulticast<T, R> extends InternalMonoOperator<T, R> implem
 			}
 			if (key == Attr.CANCELLED) {
 				return cancelled == 1;
+			}
+			if (key == Attr.RUN_STYLE) {
+			    return Attr.RunStyle.SYNC;
 			}
 
 			return InnerProducer.super.scanUnsafe(key);

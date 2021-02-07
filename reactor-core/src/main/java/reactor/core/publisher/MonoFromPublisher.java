@@ -42,21 +42,34 @@ final class MonoFromPublisher<T> extends Mono<T> implements Scannable,
 
 	MonoFromPublisher(Publisher<? extends T> source) {
 		this.source = Objects.requireNonNull(source, "publisher");
-		this.optimizableOperator = source instanceof OptimizableOperator ? (OptimizableOperator) source : null;
+		if (source instanceof OptimizableOperator) {
+			@SuppressWarnings("unchecked")
+			OptimizableOperator<?, T> optimSource = (OptimizableOperator<?, T>) source;
+			this.optimizableOperator = optimSource;
+		}
+		else {
+			this.optimizableOperator = null;
+		}
 	}
 
 	@Override
 	@SuppressWarnings("unchecked")
 	public void subscribe(CoreSubscriber<? super T> actual) {
-		CoreSubscriber<? super T> subscriber = subscribeOrReturn(actual);
-		if (subscriber == null) {
+		try {
+			CoreSubscriber<? super T> subscriber = subscribeOrReturn(actual);
+			if (subscriber == null) {
+				return;
+			}
+			source.subscribe(subscriber);
+		}
+		catch (Throwable e) {
+			Operators.error(actual, Operators.onOperatorError(e, actual.currentContext()));
 			return;
 		}
-		source.subscribe(subscriber);
 	}
 
 	@Override
-	public CoreSubscriber<? super T> subscribeOrReturn(CoreSubscriber<? super T> actual) {
+	public CoreSubscriber<? super T> subscribeOrReturn(CoreSubscriber<? super T> actual) throws Throwable {
 		return new MonoNext.NextSubscriber<>(actual);
 	}
 
@@ -75,6 +88,9 @@ final class MonoFromPublisher<T> extends Mono<T> implements Scannable,
 	public Object scanUnsafe(Scannable.Attr key) {
 		if (key == Scannable.Attr.PARENT) {
 			return source;
+		}
+		if (key == Scannable.Attr.RUN_STYLE) {
+		    return Attr.RunStyle.SYNC;
 		}
 		return null;
 	}

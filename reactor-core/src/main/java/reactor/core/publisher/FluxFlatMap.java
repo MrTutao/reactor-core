@@ -209,6 +209,12 @@ final class FluxFlatMap<T, R> extends InternalFluxOperator<T, R> {
 		return false;
 	}
 
+	@Override
+	public Object scanUnsafe(Attr key) {
+		if (key == Attr.RUN_STYLE) return Attr.RunStyle.SYNC;
+		return super.scanUnsafe(key);
+	}
+
 	static final class FlatMapMain<T, R> extends FlatMapTracker<FlatMapInner<R>>
 			implements InnerOperator<T, R> {
 
@@ -300,6 +306,7 @@ final class FluxFlatMap<T, R> extends InternalFluxOperator<T, R> {
 				if (realBuffered <= Integer.MAX_VALUE) return (int) realBuffered;
 				return Integer.MIN_VALUE;
 			}
+			if (key == Attr.RUN_STYLE) return Attr.RunStyle.SYNC;
 
 			return InnerOperator.super.scanUnsafe(key);
 		}
@@ -336,7 +343,7 @@ final class FluxFlatMap<T, R> extends InternalFluxOperator<T, R> {
 		public void request(long n) {
 			if (Operators.validate(n)) {
 				Operators.addCap(REQUESTED, this, n);
-				drain();
+				drain(null);
 			}
 		}
 
@@ -416,6 +423,8 @@ final class FluxFlatMap<T, R> extends InternalFluxOperator<T, R> {
 				FlatMapInner<R> inner = new FlatMapInner<>(this, prefetch);
 				if (add(inner)) {
 					p.subscribe(inner);
+				} else {
+					Operators.onDiscard(t, actual.currentContext());
 				}
 			}
 
@@ -438,7 +447,7 @@ final class FluxFlatMap<T, R> extends InternalFluxOperator<T, R> {
 			}
 			if (Exceptions.addThrowable(ERROR, this, t)) {
 				done = true;
-				drain();
+				drain(null);
 			}
 			else {
 				Operators.onErrorDropped(t, actual.currentContext());
@@ -452,7 +461,7 @@ final class FluxFlatMap<T, R> extends InternalFluxOperator<T, R> {
 			}
 
 			done = true;
-			drain();
+			drain(null);
 		}
 
 		void tryEmitScalar(@Nullable R v) {
@@ -504,6 +513,9 @@ final class FluxFlatMap<T, R> extends InternalFluxOperator<T, R> {
 					}
 				}
 				if (WIP.decrementAndGet(this) == 0) {
+					if (cancelled) {
+						Operators.onDiscard(v, actual.currentContext());
+					}
 					return;
 				}
 
@@ -517,7 +529,7 @@ final class FluxFlatMap<T, R> extends InternalFluxOperator<T, R> {
 				if (!q.offer(v) && failOverflow(v, s)) {
 					done = true;
 				}
-				drain();
+				drain(v);
 			}
 		}
 
@@ -547,6 +559,9 @@ final class FluxFlatMap<T, R> extends InternalFluxOperator<T, R> {
 					}
 				}
 				if (WIP.decrementAndGet(this) == 0) {
+					if (cancelled) {
+						Operators.onDiscard(v, actual.currentContext());
+					}
 					return;
 				}
 
@@ -558,12 +573,15 @@ final class FluxFlatMap<T, R> extends InternalFluxOperator<T, R> {
 				if (!q.offer(v) && failOverflow(v, inner)) {
 					inner.done = true;
 				}
-				drain();
+				drain(v);
 			}
 		}
 
-		void drain() {
+		void drain(@Nullable R dataSignal) {
 			if (WIP.getAndIncrement(this) != 0) {
+				if (dataSignal != null && cancelled) {
+					Operators.onDiscard(dataSignal, actual.currentContext());
+				}
 				return;
 			}
 			drainLoop();
@@ -586,7 +604,7 @@ final class FluxFlatMap<T, R> extends InternalFluxOperator<T, R> {
 
 				boolean noSources = isEmpty();
 
-				if (checkTerminated(d, noSources && (sq == null || sq.isEmpty()), a)) {
+				if (checkTerminated(d, noSources && (sq == null || sq.isEmpty()), a, null)) {
 					return;
 				}
 
@@ -605,7 +623,7 @@ final class FluxFlatMap<T, R> extends InternalFluxOperator<T, R> {
 
 						boolean empty = v == null;
 
-						if (checkTerminated(d, false, a)) {
+						if (checkTerminated(d, false, a, v)) {
 							return;
 						}
 
@@ -675,7 +693,7 @@ final class FluxFlatMap<T, R> extends InternalFluxOperator<T, R> {
 
 									boolean empty = v == null;
 
-									if (checkTerminated(d, false, a)) {
+									if (checkTerminated(d, false, a, v)) {
 										return;
 									}
 
@@ -782,9 +800,11 @@ final class FluxFlatMap<T, R> extends InternalFluxOperator<T, R> {
 			}
 		}
 
-		boolean checkTerminated(boolean d, boolean empty, Subscriber<?> a) {
+		boolean checkTerminated(boolean d, boolean empty, Subscriber<?> a, @Nullable R value) {
 			if (cancelled) {
-				Operators.onDiscardQueueWithClear(scalarQueue, actual.currentContext(), null);
+				Context ctx = actual.currentContext();
+				Operators.onDiscard(value, ctx);
+				Operators.onDiscardQueueWithClear(scalarQueue, ctx, null);
 				scalarQueue = null;
 				s.cancel();
 				unsubscribe();
@@ -811,7 +831,9 @@ final class FluxFlatMap<T, R> extends InternalFluxOperator<T, R> {
 					Throwable e = error;
 					if (e != null && e != Exceptions.TERMINATED) {
 						e = Exceptions.terminate(ERROR, this);
-						Operators.onDiscardQueueWithClear(scalarQueue, actual.currentContext(), null);
+						Context ctx = actual.currentContext();
+						Operators.onDiscard(value, ctx);
+						Operators.onDiscardQueueWithClear(scalarQueue, ctx, null);
 						scalarQueue = null;
 						s.cancel();
 						unsubscribe();
@@ -837,14 +859,14 @@ final class FluxFlatMap<T, R> extends InternalFluxOperator<T, R> {
 					if (!delayError) {
 						done = true;
 					}
-					drain();
+					drain(null);
 				}
 				else {
 					Operators.onErrorDropped(e, actual.currentContext());
 				}
 			}
 			else {
-				drain();
+				drain(null);
 			}
 		}
 
@@ -852,6 +874,8 @@ final class FluxFlatMap<T, R> extends InternalFluxOperator<T, R> {
 			Throwable e = Operators.onOperatorError(toCancel,
 					Exceptions.failWithOverflow(Exceptions.BACKPRESSURE_ERROR_QUEUE_FULL),
 					v, actual.currentContext());
+
+			Operators.onDiscard(v, actual.currentContext());
 
 			if (!Exceptions.addThrowable(ERROR, this, e)) {
 				Operators.onErrorDropped(e, actual.currentContext());
@@ -950,7 +974,7 @@ final class FluxFlatMap<T, R> extends InternalFluxOperator<T, R> {
 						sourceMode = Fuseable.SYNC;
 						queue = f;
 						done = true;
-						parent.drain();
+						parent.drain(null);
 						return;
 					}
 					if (m == Fuseable.ASYNC) {
@@ -966,9 +990,19 @@ final class FluxFlatMap<T, R> extends InternalFluxOperator<T, R> {
 		@Override
 		public void onNext(R t) {
 			if (sourceMode == Fuseable.ASYNC) {
-				parent.drain();
+				parent.drain(t);
 			}
 			else {
+				if (done) {
+					Operators.onNextDropped(t, parent.currentContext());
+					return;
+				}
+
+				if (s == Operators.cancelledSubscription()) {
+					Operators.onDiscard(t, parent.currentContext());
+					return;
+				}
+
 				parent.tryEmit(this, t);
 			}
 		}
@@ -988,6 +1022,9 @@ final class FluxFlatMap<T, R> extends InternalFluxOperator<T, R> {
 
 		@Override
 		public void request(long n) {
+			if (sourceMode == Fuseable.SYNC) {
+				return;
+			}
 			long p = produced + n;
 			if (p >= limit) {
 				produced = 0L;
@@ -1018,6 +1055,7 @@ final class FluxFlatMap<T, R> extends InternalFluxOperator<T, R> {
 			if (key == Attr.CANCELLED) return s == Operators.cancelledSubscription();
 			if (key == Attr.BUFFERED) return queue == null ? 0 : queue.size();
 			if (key == Attr.PREFETCH) return prefetch;
+			if (key == Attr.RUN_STYLE) return Attr.RunStyle.SYNC;
 
 			return null;
 		}

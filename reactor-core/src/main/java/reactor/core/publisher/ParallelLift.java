@@ -58,12 +58,23 @@ final class ParallelLift<I, O> extends ParallelFlux<O> implements Scannable {
 		if (key == Attr.PREFETCH) {
 			return getPrefetch();
 		}
+		if (key == Attr.RUN_STYLE) {
+			return Scannable.from(source).scanUnsafe(key);
+		}
 
 		return null;
 	}
 
 	@Override
-	protected void subscribe(CoreSubscriber<? super O>[] s) {
+	public String stepName() {
+		if (source instanceof Scannable) {
+			return Scannable.from(source).stepName();
+		}
+		return Scannable.super.stepName();
+	}
+
+	@Override
+	public void subscribe(CoreSubscriber<? super O>[] s) {
 		@SuppressWarnings("unchecked") CoreSubscriber<? super I>[] subscribers =
 				new CoreSubscriber[parallelism()];
 

@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Queue;
+import java.util.concurrent.Callable;
 import java.util.concurrent.LinkedTransferQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -28,11 +29,11 @@ import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.logging.Level;
 
-import org.junit.After;
-import org.junit.Assert;
-import org.junit.Test;
+import org.assertj.core.api.Assertions;
+import org.junit.jupiter.api.Test;
 import org.reactivestreams.Publisher;
 import org.reactivestreams.Subscription;
+
 import reactor.core.CoreSubscriber;
 import reactor.core.Exceptions;
 import reactor.core.Scannable;
@@ -43,22 +44,13 @@ import reactor.test.publisher.TestPublisher;
 import reactor.test.subscriber.AssertSubscriber;
 import reactor.util.context.Context;
 
-import static org.assertj.core.api.Assertions.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 /**
  * @author Stephane Maldini
  */
 public class HooksTest {
-
-	@After
-	public void resetAllHooks() {
-		Hooks.resetOnOperatorError();
-		Hooks.resetOnNextDropped();
-		Hooks.resetOnErrorDropped();
-		Hooks.resetOnOperatorDebug();
-		Hooks.resetOnEachOperator();
-		Hooks.resetOnLastOperator();
-	}
 
 	void simpleFlux(){
 		Flux.just(1)
@@ -73,6 +65,25 @@ public class HooksTest {
 
 		public TestException(String message) {
 			super(message);
+		}
+	}
+
+
+	@Test
+	public void staticActivationOfOperatorDebug() {
+		String oldProp = System.setProperty("reactor.trace.operatorStacktrace", "true");
+		//this will be reset by the ReactorTestExecutionListener
+		Hooks.GLOBAL_TRACE = Hooks.initStaticGlobalTrace();
+
+		try {
+			assertThat(Hooks.GLOBAL_TRACE).isTrue();
+			//would throw NPE due to https://github.com/reactor/reactor-core/issues/985
+			Mono.just("hello").subscribe();
+		}
+		finally {
+			if (oldProp != null) {
+				System.setProperty("reactor.trace.operatorStacktrace", oldProp);
+			}
 		}
 	}
 
@@ -106,7 +117,7 @@ public class HooksTest {
 		Hooks.onEachOperator(hook);
 		Hooks.onEachOperatorHook.apply(s -> {});
 
-		assertThat(applied.get()).isEqualTo(1);
+		assertThat(applied).hasValue(1);
 	}
 
 	@Test
@@ -121,7 +132,7 @@ public class HooksTest {
 		Hooks.onEachOperator("other", hook);
 		Hooks.onEachOperatorHook.apply(s -> {});
 
-		assertThat(applied.get()).isEqualTo(2);
+		assertThat(applied).hasValue(2);
 	}
 
 	@Test
@@ -243,7 +254,7 @@ public class HooksTest {
 		Hooks.onLastOperator(hook);
 		Hooks.onLastOperatorHook.apply(s -> {});
 
-		assertThat(applied.get()).isEqualTo(1);
+		assertThat(applied).hasValue(1);
 	}
 
 	@Test
@@ -258,7 +269,7 @@ public class HooksTest {
 		Hooks.onLastOperator("other", hook);
 		Hooks.onLastOperatorHook.apply(s -> {});
 
-		assertThat(applied.get()).isEqualTo(2);
+		assertThat(applied).hasValue(2);
 	}
 
 	@Test
@@ -380,7 +391,7 @@ public class HooksTest {
 		Hooks.onOperatorError(hook);
 		Hooks.onOperatorErrorHook.apply(new IllegalStateException("boom"), "foo");
 
-		assertThat(applied.get()).isEqualTo(1);
+		assertThat(applied).hasValue(1);
 	}
 
 	@Test
@@ -395,7 +406,7 @@ public class HooksTest {
 		Hooks.onOperatorError("other", hook);
 		Hooks.onOperatorErrorHook.apply(new IllegalStateException("boom"), "foo");
 
-		assertThat(applied.get()).isEqualTo(2);
+		assertThat(applied).hasValue(2);
 	}
 
 	@Test
@@ -517,30 +528,16 @@ public class HooksTest {
 
 		Throwable w = Operators.onOperatorError(null, new Exception(), "hello", Context.empty());
 
-		Assert.assertTrue(w instanceof TestException);
-		Assert.assertTrue(w.getMessage()
-		                   .equals("hello"));
+		assertThat(w).isInstanceOf(TestException.class);
+		assertThat(w).hasMessage("hello");
 
-		try {
+		assertThatExceptionOfType(TestException.class).isThrownBy(() -> {
 			Operators.onNextDropped("hello", Context.empty());
-			Assert.fail();
-		}
-		catch (Throwable t) {
-			t.printStackTrace();
-			Assert.assertTrue(t instanceof TestException);
-			Assert.assertTrue(t.getMessage()
-			                   .equals("hello"));
-		}
+		}).withMessage("hello");
 
-		try {
+		assertThatExceptionOfType(TestException.class).isThrownBy(() -> {
 			Operators.onErrorDropped(new Exception(), Context.empty());
-			Assert.fail();
-		}
-		catch (Throwable t) {
-			Assert.assertTrue(t instanceof TestException);
-			Assert.assertTrue(t.getMessage()
-			                   .equals("errorDrop"));
-		}
+		}).withMessage("errorDrop");
 	}
 
 	@Test
@@ -555,7 +552,7 @@ public class HooksTest {
 
 		Operators.onNextDropped("foo", Context.empty());
 
-		assertThat(ref.get()).isEqualTo("foobar");
+		assertThat(ref).hasValue("foobar");
 
 		Hooks.onErrorDropped(d -> {
 			ref.set(d.getMessage());
@@ -566,7 +563,7 @@ public class HooksTest {
 
 		Operators.onErrorDropped(new Exception("foo"), Context.empty());
 
-		assertThat(ref.get()).isEqualTo("foobar");
+		assertThat(ref).hasValue("foobar");
 
 		Hooks.resetOnErrorDropped();
 
@@ -582,7 +579,7 @@ public class HooksTest {
 
 		Operators.onOperatorError(null, null, "foo", Context.empty());
 
-		assertThat(ref.get()).isEqualTo("foobar");
+		assertThat(ref).hasValue("foobar");
 
 		Hooks.resetOnOperatorError();
 
@@ -590,8 +587,8 @@ public class HooksTest {
 		AtomicReference<Publisher> hook = new AtomicReference<>();
 		AtomicReference<Object> hook2 = new AtomicReference<>();
 		Hooks.onEachOperator(h -> {
-			Flux<Object> publisher = TestPublisher.create()
-			                                      .flux();
+			Flux<Object> publisher = Hooks.convertToFluxBypassingHooks(
+					TestPublisher.create());
 			hook.set(publisher);
 			return publisher;
 		});
@@ -609,7 +606,8 @@ public class HooksTest {
 		hook2.set(null);
 
 		Hooks.onLastOperator(h -> {
-			final Flux<Object> publisher = TestPublisher.create().flux();
+			final Flux<Object> publisher = Hooks.convertToFluxBypassingHooks(
+					TestPublisher.create());
 			hook.set(publisher);
 			return publisher;
 		});
@@ -739,179 +737,18 @@ public class HooksTest {
 	@Test
 	public void testMultiReceiver() throws Exception {
 		Hooks.onOperatorDebug();
-		try {
+		ConnectableFlux<?> t = Flux.empty()
+		    .then(Mono.defer(() -> {
+			    throw new RuntimeException();
+		    })).flux().publish();
 
-			ConnectableFlux<?> t = Flux.empty()
-			    .then(Mono.defer(() -> {
-				    throw new RuntimeException();
-			    })).flux().publish();
+		t.map(d -> d).subscribe(null,
+				e -> assertThat(e.getSuppressed()[0]).hasMessageContaining("\t|_ Flux.publish"));
 
-			t.map(d -> d).subscribe(null,
-					e -> assertThat(e.getSuppressed()[0]).hasMessageContaining("\t|_ Flux.publish"));
+		t.filter(d -> true).subscribe(null, e -> assertThat(e.getSuppressed()[0]).hasMessageContaining("|_____ Flux.publish"));
+		t.distinct().subscribe(null, e -> assertThat(e.getSuppressed()[0]).hasMessageContaining("_________  Flux.publish"));
 
-			t.filter(d -> true).subscribe(null, e -> assertThat(e.getSuppressed()[0]).hasMessageContaining("|_____ Flux.publish"));
-			t.distinct().subscribe(null, e -> assertThat(e.getSuppressed()[0]).hasMessageContaining("_________  Flux.publish"));
-
-			t.connect();
-		}
-		finally {
-			Hooks.resetOnOperatorDebug();
-		}
-	}
-
-	@Test
-	public void lastOperatorTest() {
-		Hooks.onLastOperator(Operators.lift((sc, sub) ->
-				new CoreSubscriber<Object>(){
-					@Override
-					public void onSubscribe(Subscription s) {
-						sub.onSubscribe(s);
-					}
-
-					@Override
-					public void onNext(Object o) {
-						sub.onNext(((Integer)o) + 1);
-					}
-
-					@Override
-					public void onError(Throwable t) {
-						sub.onError(t);
-					}
-
-					@Override
-					public void onComplete() {
-						sub.onComplete();
-					}
-				}));
-
-		StepVerifier.create(Flux.just(1, 2, 3)
-		                        .log("log", Level.FINE)
-		                        .log("log", Level.FINE))
-		            .expectNext(2, 3, 4)
-		            .verifyComplete();
-
-		StepVerifier.create(Mono.just(1)
-		                        .log("log", Level.FINE)
-		                        .log("log", Level.FINE))
-		            .expectNext(2)
-		            .verifyComplete();
-
-		StepVerifier.create(ParallelFlux.from(Mono.just(1), Mono.just(1))
-		                        .log("log", Level.FINE)
-		                        .log("log", Level.FINE))
-		            .expectNext(2, 2)
-		            .verifyComplete();
-	}
-
-	@Test
-	public void lastOperatorFilterTest() {
-		Hooks.onLastOperator(Operators.lift(sc -> sc.tags()
-		                                            .anyMatch(t -> t.getT1()
-		                                                            .contains("metric")),
-				(sc, sub) -> new CoreSubscriber<Object>() {
-					@Override
-					public void onSubscribe(Subscription s) {
-						sub.onSubscribe(s);
-					}
-
-					@Override
-					public void onNext(Object o) {
-						sub.onNext(((Integer) o) + 1);
-					}
-
-					@Override
-					public void onError(Throwable t) {
-						sub.onError(t);
-					}
-
-					@Override
-					public void onComplete() {
-						sub.onComplete();
-					}
-				}));
-
-		StepVerifier.create(Flux.just(1, 2, 3)
-		                        .tag("metric", "test")
-		                        .log("log", Level.FINE)
-		                        .log("log", Level.FINE))
-		            .expectNext(2, 3, 4)
-		            .verifyComplete();
-
-		StepVerifier.create(Mono.just(1)
-		                        .tag("metric", "test")
-		                        .log("log", Level.FINE)
-		                        .log("log", Level.FINE))
-		            .expectNext(2)
-		            .verifyComplete();
-
-		StepVerifier.create(ParallelFlux.from(Mono.just(1), Mono.just(1))
-		                                .tag("metric", "test")
-		                                .log("log", Level.FINE)
-		                                .log("log", Level.FINE))
-		            .expectNext(2, 2)
-		            .verifyComplete();
-
-		StepVerifier.create(Flux.just(1, 2, 3)
-		                        .log("log", Level.FINE)
-		                        .log("log", Level.FINE))
-		            .expectNext(1, 2, 3)
-		            .verifyComplete();
-
-		StepVerifier.create(Mono.just(1)
-		                        .log("log", Level.FINE)
-		                        .log("log", Level.FINE))
-		            .expectNext(1)
-		            .verifyComplete();
-
-		StepVerifier.create(ParallelFlux.from(Mono.just(1), Mono.just(1))
-		                                .log("log", Level.FINE)
-		                                .log("log", Level.FINE))
-		            .expectNext(1, 1)
-		            .verifyComplete();
-	}
-
-	@Test
-	public void eachOperatorTest() {
-		Hooks.onEachOperator(Operators.lift((sc, sub) ->
-				new CoreSubscriber<Object>(){
-					@Override
-					public void onSubscribe(Subscription s) {
-						sub.onSubscribe(s);
-					}
-
-					@Override
-					public void onNext(Object o) {
-						sub.onNext(((Integer)o) + 1);
-					}
-
-					@Override
-					public void onError(Throwable t) {
-						sub.onError(t);
-					}
-
-					@Override
-					public void onComplete() {
-						sub.onComplete();
-					}
-				}));
-
-		StepVerifier.create(Flux.just(1, 2, 3)
-		                        .log("log", Level.FINE)
-		                        .log("log", Level.FINE))
-		            .expectNext(4, 5, 6)
-		            .verifyComplete();
-
-		StepVerifier.create(Mono.just(1)
-		                        .log("log", Level.FINE)
-		                        .log("log", Level.FINE))
-		            .expectNext(4)
-		            .verifyComplete();
-
-		StepVerifier.create(ParallelFlux.from(Mono.just(1), Mono.just(1))
-		                                .log("log", Level.FINE)
-		                                .log("log", Level.FINE))
-		            .expectNext(6, 6)
-		            .verifyComplete();
+		t.connect();
 	}
 
 	@Test
@@ -940,5 +777,439 @@ public class HooksTest {
 		finally {
 			Hooks.resetOnNextDropped();
 		}
+	}
+
+	@Test
+	public void lastOperatorLiftsFlux() {
+		AtomicInteger liftCounter = new AtomicInteger();
+		Hooks.onLastOperator(Operators.lift((sc, sub) -> liftSubscriber(sc, sub, liftCounter)));
+
+		StepVerifier.create(Flux.just(1, 2, 3)
+		                        .log()
+		                        .log())
+		            .expectNext(101, 102, 103)
+		            .verifyComplete();
+
+		assertThat(liftCounter).hasValue(1);
+	}
+
+	@Test
+	public void lastOperatorLiftsMono() {
+		AtomicInteger liftCounter = new AtomicInteger();
+		Hooks.onLastOperator(Operators.lift((sc, sub) -> liftSubscriber(sc, sub, liftCounter)));
+
+		StepVerifier.create(Mono.just(1)
+		                        .log()
+		                        .log())
+		            .expectNext(101)
+		            .verifyComplete();
+	}
+
+	@Test
+	public void lastOperatorLiftsParallelFlux() {
+		AtomicInteger liftCounter = new AtomicInteger();
+		Hooks.onLastOperator(Operators.lift((sc, sub) -> liftSubscriber(sc, sub, liftCounter)));
+
+		StepVerifier.create(ParallelFlux.from(Mono.just(1), Mono.just(1))
+		                                .log()
+		                                .log())
+		            .expectNext(101, 101)
+		            .verifyComplete();
+	}
+
+	@Test
+	public void lastOperatorFilteredLiftFlux() {
+		AtomicInteger liftCounter = new AtomicInteger();
+		Hooks.onLastOperator(Operators.lift(sc -> sc.tags()
+		                                            .anyMatch(t -> t.getT1().contains("metric")),
+				(sc, sub) -> liftSubscriber(sc, sub, liftCounter)));
+
+		StepVerifier.create(Flux.just(1, 2, 3)
+		                        .tag("metric", "test")
+		                        .log()
+		                        .log())
+		            .expectNext(101, 102, 103)
+		            .verifyComplete();
+
+		StepVerifier.create(Flux.just(1, 2, 3)
+		                        .log()
+		                        .log())
+		            .expectNext(1, 2, 3)
+		            .verifyComplete();
+	}
+
+	@Test
+	public void lastOperatorFilteredLiftMono() {
+		AtomicInteger liftCounter = new AtomicInteger();
+		Hooks.onLastOperator(Operators.lift(sc -> sc.tags()
+		                                            .anyMatch(t -> t.getT1().contains("metric")),
+				(sc, sub) -> liftSubscriber(sc, sub, liftCounter)));
+
+		StepVerifier.create(Mono.just(1)
+		                        .tag("metric", "test")
+		                        .log()
+		                        .log())
+		            .expectNext(101)
+		            .verifyComplete();
+
+		StepVerifier.create(Mono.just(1)
+		                        .log()
+		                        .log())
+		            .expectNext(1)
+		            .verifyComplete();
+	}
+
+	@Test
+	public void lastOperatorFilteredLiftParallelFlux() {
+		AtomicInteger liftCounter = new AtomicInteger();
+		Hooks.onLastOperator(Operators.lift(sc -> sc.tags()
+		                                            .anyMatch(t -> t.getT1().contains("metric")),
+				(sc, sub) -> liftSubscriber(sc, sub, liftCounter)));
+
+		StepVerifier.create(ParallelFlux.from(Mono.just(1), Mono.just(1))
+		                                .tag("metric", "test")
+		                                .log()
+		                                .log())
+		            .expectNext(101, 101)
+		            .verifyComplete();
+
+		StepVerifier.create(ParallelFlux.from(Mono.just(1), Mono.just(1))
+		                                .log()
+		                                .log())
+		            .expectNext(1, 1)
+		            .verifyComplete();
+	}
+
+	@Test
+	public void eachOperatorLiftsFlux() {
+		AtomicInteger liftCounter = new AtomicInteger();
+		Hooks.onEachOperator(Operators.lift((sc, sub) -> liftSubscriber(sc, sub, liftCounter)));
+
+		StepVerifier.create(Flux.just(1, 2, 3)
+		                        .log()
+		                        .log())
+		            .expectNext(301, 302, 303)
+		            .verifyComplete();
+	}
+
+	@Test
+	public void eachOperatorLiftsMono() {
+		AtomicInteger liftCounter = new AtomicInteger();
+		Hooks.onEachOperator(Operators.lift((sc, sub) -> liftSubscriber(sc, sub, liftCounter)));
+
+		StepVerifier.create(Mono.just(1)
+		                        .log()
+		                        .log())
+		            .expectNext(301)
+		            .verifyComplete();
+	}
+
+	@Test
+	public void eachOperatorLiftsParallelFlux() {
+		AtomicInteger liftCounter = new AtomicInteger();
+		Hooks.onEachOperator(Operators.lift((sc, sub) -> liftSubscriber(sc, sub, liftCounter)));
+
+		StepVerifier.create(ParallelFlux.from(Mono.just(1), Mono.just(1)) //internally converts each rail to a Flux using Flux.from
+		                                .log()
+		                                .log())
+		            .expectNext(601, 601) //6x lifts => just,Flux.from,ParallelFlux.from,log,log, back to sequential (shared)
+		            .verifyComplete();
+
+		assertThat(liftCounter).hasValue(11); //11x total lifts: 2xjust, 2xfrom, 2xparallelFrom,4xlog,sequential
+	}
+
+	@Test
+	public void fluxWrapFluxSourceDoesntCallAssemblyHook() {
+		final Flux<Integer> source = Flux.range(1, 10);
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		Hooks.convertToFluxBypassingHooks(source);
+		Flux.wrap(source);
+		Assertions.assertThat(wrappedCount).hasValue(0);
+	}
+
+	@Test
+	public void fluxWrapScalarJustDoesntCallAssemblyHook() {
+		final Mono<String> source = Mono.just("scalarJust");
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		Hooks.convertToFluxBypassingHooks(source);
+		Flux.wrap(source);
+		Assertions.assertThat(wrappedCount).hasValue(0);
+	}
+
+	@Test
+	public void fluxWrapScalarErrorDoesntCallAssemblyHook() {
+		final Mono<Object> source = Mono.error(new IllegalStateException("scalarError"));
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		Hooks.convertToFluxBypassingHooks(source);
+		Flux.wrap(source);
+		Assertions.assertThat(wrappedCount).hasValue(0);
+	}
+
+	@Test
+	public void fluxWrapScalarEmptyDoesntCallAssemblyHook() {
+		final Mono<Object> source = Mono.empty();
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		Hooks.convertToFluxBypassingHooks(source);
+		Flux.wrap(source);
+		Assertions.assertThat(wrappedCount).hasValue(0);
+	}
+
+	@Test
+	public void fluxWrapMonoFuseableDoesntCallAssemblyHook() {
+		Mono<String> source = Mono.just("monoFuseable").map(i -> i);
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		Hooks.convertToFluxBypassingHooks(source);
+		Flux.wrap(source);
+		Assertions.assertThat(wrappedCount).hasValue(0);
+	}
+
+	@Test
+	public void fluxWrapMonoNormalDoesntCallAssemblyHook() {
+		final Mono<String> source = Mono.just("monoNormal")
+		                                .hide()
+		                                .map(i -> i);
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		Hooks.convertToFluxBypassingHooks(source);
+		Flux.wrap(source);
+		Assertions.assertThat(wrappedCount).hasValue(0);
+	}
+
+	@Test
+	public void fluxWrapPublisherDoesntCallAssemblyHook() {
+		Publisher<String> publisher = sub -> sub.onSubscribe(Operators.emptySubscription());
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		Hooks.convertToFluxBypassingHooks(publisher);
+		Flux.wrap(publisher);
+		Assertions.assertThat(wrappedCount).hasValue(0);
+	}
+
+	@Test
+	public void monoWrapMonoDoesntCallAssemblyHook() {
+		final Mono<Integer> source = Mono.just(1);
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		Hooks.convertToMonoBypassingHooks(source, true);
+		Hooks.convertToMonoBypassingHooks(source, false);
+		Mono.wrap(source, true);
+		Mono.wrap(source, false);
+		Assertions.assertThat(wrappedCount).hasValue(0);
+	}
+
+	@Test
+	public void monoWrapFluxWrappingMonoDoesntCallAssemblyHook() {
+		final Flux<Integer> source = Flux.from(Mono.just(1).hide());
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		Hooks.convertToMonoBypassingHooks(source, true);
+		Hooks.convertToMonoBypassingHooks(source, false);
+		Mono.wrap(source, true);
+		Mono.wrap(source, false);
+		Assertions.assertThat(wrappedCount).hasValue(0);
+	}
+
+	@Test
+	public void monoWrapCallableFluxDoesntCallAssemblyHook() {
+		final Flux<Integer> source = Flux.just(1);
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		Hooks.convertToMonoBypassingHooks(source, true);
+		Hooks.convertToMonoBypassingHooks(source, false);
+		Mono.wrap(source, true);
+		Mono.wrap(source, false);
+		Assertions.assertThat(wrappedCount).hasValue(0);
+	}
+
+	@Test
+	public void monoWrapFluxDoesntCallAssemblyHook() {
+		final Flux<Integer> source = Flux.just(1).hide();
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		Hooks.convertToMonoBypassingHooks(source, true);
+		Hooks.convertToMonoBypassingHooks(source, false);
+		Mono.wrap(source, true);
+		Mono.wrap(source, false);
+		Assertions.assertThat(wrappedCount).hasValue(0);
+	}
+
+	@Test
+	public void monoWrapPublisherDoesntCallAssemblyHook() {
+		final Publisher<Integer> source = TestPublisher.create();
+		Assertions.assertThat(source).isNotInstanceOf(Flux.class); //smoke test this is a Publisher
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		Hooks.convertToMonoBypassingHooks(source, true);
+		Hooks.convertToMonoBypassingHooks(source, false);
+		Mono.wrap(source, true);
+		Mono.wrap(source, false);
+		Assertions.assertThat(wrappedCount).hasValue(0);
+	}
+
+	@Test
+	public void fluxWrapToMonoScalarEmptyDoesntCallAssemblyHook() {
+		@SuppressWarnings("unchecked")
+		Callable<Integer> source = (Callable<Integer>) Flux.empty();
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		Flux.wrapToMono(source);
+		Assertions.assertThat(wrappedCount).hasValue(0);
+	}
+
+	@Test
+	public void fluxWrapToMonoScalarValuedDoesntCallAssemblyHook() {
+		@SuppressWarnings("unchecked")
+		Callable<Integer> source = (Callable<Integer>) Flux.just(1);
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		Flux.wrapToMono(source);
+		Assertions.assertThat(wrappedCount).hasValue(0);
+	}
+
+	@Test
+	public void fluxWrapToMonoScalarErrorDoesntCallAssemblyHook() {
+		@SuppressWarnings("unchecked")
+		Callable<Integer> source = (Callable<Integer>) Flux.error(new IllegalStateException("boom"));
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		Flux.wrapToMono(source);
+		Assertions.assertThat(wrappedCount).hasValue(0);
+	}
+
+	@Test
+	public void fluxWrapToMonoVanillaCallableDoesntCallAssemblyHook() {
+		Callable<Integer> source = () -> 1;
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		Flux.wrapToMono(source);
+		Assertions.assertThat(wrappedCount).hasValue(0);
+	}
+
+	private static CoreSubscriber<Object> liftSubscriber(Scannable scannable, CoreSubscriber<? super Object> sub, AtomicInteger liftCounter) {
+		liftCounter.incrementAndGet();
+		return new CoreSubscriber<Object>() {
+
+			@Override
+			public void onSubscribe(Subscription s) {
+				sub.onSubscribe(s);
+			}
+
+			@Override
+			public void onNext(Object o) {
+				System.out.println("Lifting " + o + " out of " + scannable.stepName());
+				sub.onNext((Integer) o + 100);
+			}
+
+			@Override
+			public void onError(Throwable t) {
+				sub.onError(t);
+			}
+
+			@Override
+			public void onComplete() {
+				sub.onComplete();
+			}
+		};
 	}
 }

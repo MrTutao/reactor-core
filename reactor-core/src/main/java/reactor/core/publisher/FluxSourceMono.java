@@ -17,6 +17,7 @@ package reactor.core.publisher;
 
 import org.reactivestreams.Publisher;
 import reactor.core.CoreSubscriber;
+import reactor.core.Scannable;
 
 /**
  * A connecting {@link Flux} Publisher (right-to-left from a composition chain perspective)
@@ -35,6 +36,14 @@ final class FluxSourceMono<I> extends FluxFromMonoOperator<I, I> {
 		super(source);
 	}
 
+	@Override
+	public String stepName() {
+		if (source instanceof Scannable) {
+			return "FluxFromMono(" + Scannable.from(source).stepName() + ")";
+		}
+		return "FluxFromMono(" + source.toString() + ")";
+	}
+
 	/**
 	 * Default is simply delegating and decorating with {@link Flux} API. Note this
 	 * assumes an identity between input and output types.
@@ -45,4 +54,9 @@ final class FluxSourceMono<I> extends FluxFromMonoOperator<I, I> {
 		return actual;
 	}
 
+	@Override
+	public Object scanUnsafe(Attr key) {
+		if (key == Attr.RUN_STYLE) return Scannable.from(source).scanUnsafe(key);
+		return super.scanUnsafe(key);
+	}
 }

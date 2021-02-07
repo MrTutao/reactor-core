@@ -22,26 +22,31 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import org.assertj.core.api.Assertions;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.reactivestreams.Subscription;
-import reactor.core.Scannable;
-import reactor.util.context.Context;
 
-import static org.hamcrest.Matchers.*;
-import static org.junit.Assert.*;
+import reactor.core.Scannable;
+import reactor.test.util.LoggerUtils;
+import reactor.test.util.TestLogger;
+import reactor.util.context.Context;
+import reactor.util.context.ContextView;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
+import static org.assertj.core.api.Assertions.fail;
 
 public class LambdaMonoSubscriberTest {
 
 
 	@Test
 	public void initialContextIsVisibleToUpstream() {
-		AtomicReference<Context> contextRef = new AtomicReference<>();
+		AtomicReference<ContextView> contextRef = new AtomicReference<>();
 
-		Mono.subscriberContext()
+		Mono.deferContextual(Mono::just)
 		    .doOnNext(contextRef::set)
 		    .subscribe(null, null, null, Context.of("subscriber", "context"));
 
-		Assertions.assertThat(contextRef.get())
+		assertThat(contextRef.get())
 		          .isNotNull()
 		          .matches(c -> c.hasKey("subscriber"));
 	}
@@ -57,7 +62,7 @@ public class LambdaMonoSubscriberTest {
 		//now trigger drop
 		sub.onError(expectDropped);
 
-		Assertions.assertThat(droppedRef).hasValue(expectDropped);
+		assertThat(droppedRef).hasValue(expectDropped);
 	}
 
 	@Test
@@ -75,12 +80,9 @@ public class LambdaMonoSubscriberTest {
 		//the error is expected to be propagated through onError
 		tested.onSubscribe(testSubscription);
 
-		assertThat("unexpected exception in onError",
-				errorHolder.get(), is(instanceOf(IllegalArgumentException.class)));
-		assertThat("subscription has not been cancelled",
-				testSubscription.isCancelled, is(true));
-		assertThat("unexpected request",
-				testSubscription.requested, is(equalTo(-1L)));
+		assertThat(errorHolder.get()).as("onError").isInstanceOf(IllegalArgumentException.class);
+		assertThat(testSubscription.isCancelled).as("subscription should be cancelled").isTrue();
+		assertThat(testSubscription.requested).as("request").isEqualTo(-1L);
 	}
 
 	@Test
@@ -104,11 +106,11 @@ public class LambdaMonoSubscriberTest {
 			//expected
 		}
 
-		assertThat("unexpected onError", errorHolder.get(), is(nullValue()));
-		assertThat("subscription has been cancelled despite fatal exception",
-				testSubscription.isCancelled, is(not(true)));
-		assertThat("unexpected request",
-				testSubscription.requested, is(equalTo(-1L)));
+		assertThat(errorHolder.get()).as("onError").isNull();
+		assertThat(testSubscription.isCancelled)
+				.as("subscription should not be cancelled due to fatal exception")
+				.isFalse();
+		assertThat(testSubscription.requested).as("unexpected request").isEqualTo(-1L);
 	}
 
 	@Test
@@ -127,13 +129,10 @@ public class LambdaMonoSubscriberTest {
 
 		tested.onSubscribe(testSubscription);
 
-		assertThat("unexpected onError", errorHolder.get(), is(nullValue()));
-		assertThat("subscription has been cancelled",
-				testSubscription.isCancelled, is(not(true)));
-		assertThat("didn't consume the subscription",
-				subscriptionHolder.get(), is(equalTo(testSubscription)));
-		assertThat("didn't request the subscription",
-				testSubscription.requested, is(equalTo(32L)));
+		assertThat(errorHolder.get()).as("onError").isNull();
+		assertThat(testSubscription.isCancelled).as("subscription should not be cancelled").isFalse();
+		assertThat(subscriptionHolder.get()).as("subscription should be consumed").isEqualTo(testSubscription);
+		assertThat(testSubscription.requested).as("subscription should be requested").isEqualTo(32L);
 	}
 
 	@Test
@@ -148,17 +147,16 @@ public class LambdaMonoSubscriberTest {
 
 		tested.onSubscribe(testSubscription);
 
-		assertThat("unexpected onError", errorHolder.get(), is(nullValue()));
-		assertThat("subscription has been cancelled",
-				testSubscription.isCancelled, is(not(true)));
-		assertThat("didn't request the subscription",
-				testSubscription.requested, is(not(equalTo(-1L))));
-		assertThat("didn't request max",
-				testSubscription.requested, is(equalTo(Long.MAX_VALUE)));
+		assertThat(errorHolder.get()).as("onError").isNull();
+		assertThat(testSubscription.isCancelled).as("subscription should not be cancelled").isFalse();
+		assertThat(testSubscription.requested)
+				.as("should request max")
+				.isNotEqualTo(-1L)
+				.isEqualTo(Long.MAX_VALUE);
 	}
 
 	@Test
-	public void onNextConsumerExceptionBubblesUpDoesntTriggerCancellation() {
+	public void onNextConsumerExceptionTriggersCancellation() {
 		AtomicReference<Throwable> errorHolder = new AtomicReference<>(null);
 
 		LambdaMonoSubscriber<String> tested = new LambdaMonoSubscriber<>(
@@ -170,115 +168,130 @@ public class LambdaMonoSubscriberTest {
 		TestSubscription testSubscription = new TestSubscription();
 		tested.onSubscribe(testSubscription);
 
-		//as Mono is single-value, it cancels early on onNext. this leads to an exception
-		//during onNext to be bubbled up as a BubbledException, not propagated through onNext
-		try {
-			tested.onNext("foo");
-			fail("Expected a bubbling Exception");
-		} catch (RuntimeException e) {
-			assertThat("Expected a bubbling Exception", e.getClass().getName(),
-					containsString("BubblingException"));
-			assertThat("Expected cause to be the IllegalArgumentException", e.getCause(),
-					is(instanceOf(IllegalArgumentException.class)));
-		}
+		//the error is expected to be propagated through doError
+		tested.onNext("foo");
 
-		assertThat("unexpected exception in onError",
-				errorHolder.get(), is(nullValue()));
-		assertThat("subscription has been cancelled",
-				testSubscription.isCancelled, is(false));
+		assertThat(errorHolder.get()).as("onError").isInstanceOf(IllegalArgumentException.class);
+		assertThat(testSubscription.isCancelled).as("subscription isCancelled").isTrue();
+	}
+
+	@Test
+	public void onNextConsumerExceptionNonFatalTriggersCancellation() {
+		TestLogger testLogger = new TestLogger();
+		LoggerUtils.enableCaptureWith(testLogger);
+		try {
+			LambdaMonoSubscriber<String> tested = new LambdaMonoSubscriber<>(
+					value -> { throw new IllegalArgumentException(); },
+					null, //no errorConsumer so that we use onErrorDropped
+					() -> { }, null);
+
+			TestSubscription testSubscription = new TestSubscription();
+			tested.onSubscribe(testSubscription);
+
+			//as Mono is single-value, it cancels early on onNext. this leads to an exception
+			//during onNext to be bubbled up as a BubbledException, not propagated through onNext
+			tested.onNext("foo");
+			Assertions.assertThat(testLogger.getErrContent())
+			          .contains("Operator called default onErrorDropped")
+			          .contains("IllegalArgumentException");
+
+			assertThat(testSubscription.isCancelled).as("subscription isCancelled")
+			                                        .isTrue();
+		}
+		finally {
+			LoggerUtils.disableCapture();
+		}
 	}
 
 	@Test
 	public void onNextConsumerFatalDoesntTriggerCancellation() {
-		AtomicReference<Throwable> errorHolder = new AtomicReference<>(null);
-
-		LambdaMonoSubscriber<String> tested = new LambdaMonoSubscriber<>(
-				value -> { throw new OutOfMemoryError(); },
-				errorHolder::set,
-				() -> {},
-				null);
-
-		TestSubscription testSubscription = new TestSubscription();
-		tested.onSubscribe(testSubscription);
-
-		//the error is expected to be thrown as it is fatal
+		TestLogger testLogger = new TestLogger();
+		LoggerUtils.enableCaptureWith(testLogger);
 		try {
-			tested.onNext("foo");
-			fail("Expected OutOfMemoryError to be thrown");
-		}
-		catch (OutOfMemoryError e) {
-			//expected
-		}
+			LambdaMonoSubscriber<String> tested = new LambdaMonoSubscriber<>(
+					value -> { throw new OutOfMemoryError(); },
+					null, //no errorConsumer so that we use onErrorDropped
+					() -> { }, null);
 
-		assertThat("unexpected onError", errorHolder.get(), is(nullValue()));
-		assertThat("subscription has been cancelled", testSubscription.isCancelled, is(false));
+			TestSubscription testSubscription = new TestSubscription();
+			tested.onSubscribe(testSubscription);
+
+			//the error is expected to be thrown as it is fatal, so it doesn't go through onErrorDropped
+			assertThatExceptionOfType(OutOfMemoryError.class).isThrownBy(() -> tested.onNext("foo"));
+			Assertions.assertThat(testLogger.getErrContent()).isEmpty();
+
+			assertThat(testSubscription.isCancelled).as("subscription isCancelled")
+			                                        .isFalse();
+		}
+		finally {
+			LoggerUtils.disableCapture();
+		}
 	}
 
 	@Test
 	public void emptyMonoState(){
-		assertTrue(Mono.fromDirect(s -> {
-			assertTrue(s instanceof LambdaMonoSubscriber);
-			LambdaMonoSubscriber<?> bfs = (LambdaMonoSubscriber<?>)s;
-			assertTrue(bfs.scan(Scannable.Attr.PREFETCH) == Integer.MAX_VALUE);
-			assertFalse(bfs.scan(Scannable.Attr.TERMINATED));
+		assertThat(Mono.fromDirect(s -> {
+			assertThat(s).isInstanceOf(LambdaMonoSubscriber.class);
+			LambdaMonoSubscriber<?> bfs = (LambdaMonoSubscriber<?>) s;
+			assertThat(bfs.scan(Scannable.Attr.PREFETCH) == Integer.MAX_VALUE).isTrue();
+			assertThat(bfs.scan(Scannable.Attr.TERMINATED)).isFalse();
 			bfs.onSubscribe(Operators.emptySubscription());
 			bfs.onSubscribe(Operators.emptySubscription()); // noop
 			s.onComplete();
-			assertTrue(bfs.scan(Scannable.Attr.TERMINATED));
+			assertThat(bfs.scan(Scannable.Attr.TERMINATED)).isTrue();
 			bfs.dispose();
 			bfs.dispose();
-		}).subscribe(s -> {}, null, () -> {}).isDisposed());
+		}).subscribe(s -> {}, null, () -> {}).isDisposed()).isTrue();
 
-		assertFalse(Mono.never().subscribe(null, null, () -> {}).isDisposed());
+		assertThat(Mono.never().subscribe(null, null, () -> {}).isDisposed()).isFalse();
 	}
 
 	@Test
 	public void errorMonoState(){
-		Hooks.onErrorDropped(e -> assertTrue(e.getMessage().equals("test2")));
-		Hooks.onNextDropped(d -> assertTrue(d.equals("test2")));
-		try {
-			Mono.fromDirect(s -> {
-				assertTrue(s instanceof LambdaMonoSubscriber);
-				LambdaMonoSubscriber<?> bfs = (LambdaMonoSubscriber<?>) s;
-				Operators.error(s, new Exception("test"));
-				s.onComplete();
-				s.onError(new Exception("test2"));
-				s.onNext("test2");
-				assertTrue(bfs.scan(Scannable.Attr.TERMINATED));
-				bfs.dispose();
-			})
-			          .subscribe(s -> {
-			          }, e -> {
-			          }, () -> {
-			          });
-		}
-		finally {
-			Hooks.resetOnErrorDropped();
-			Hooks.resetOnNextDropped();
-		}
+		Hooks.onErrorDropped(e -> assertThat(e).hasMessage("test2"));
+		Hooks.onNextDropped(d -> assertThat(d).isEqualTo("test2"));
+		Mono.fromDirect(s -> {
+			assertThat(s).isInstanceOf(LambdaMonoSubscriber.class);
+			LambdaMonoSubscriber<?> bfs = (LambdaMonoSubscriber<?>) s;
+			Operators.error(s, new Exception("test"));
+			s.onComplete();
+			s.onError(new Exception("test2"));
+			s.onNext("test2");
+			assertThat(bfs.scan(Scannable.Attr.TERMINATED)).isTrue();
+			bfs.dispose();
+		})
+		          .subscribe(s -> {
+		          }, e -> {
+		          }, () -> {
+		          });
 	}
 
 	@Test
 	public void completeHookErrorDropped() {
-		Hooks.onErrorDropped(e -> assertTrue(e.getMessage().equals("complete")));
-		try {
-			Mono.just("foo")
-		        .subscribe(v -> {},
-				        e -> {},
-				        () -> { throw new IllegalStateException("complete");});
-		}
-		finally {
-			Hooks.resetOnErrorDropped();
-		}
+		Hooks.onErrorDropped(e -> assertThat(e).hasMessage("complete"));
+		Mono.just("foo")
+	        .subscribe(v -> {},
+			        e -> {},
+			        () -> { throw new IllegalStateException("complete");});
 	}
 
 	@Test
 	public void noErrorHookThrowsCallbackNotImplemented() {
-		RuntimeException boom = new IllegalArgumentException("boom");
-		Assertions.assertThatExceptionOfType(RuntimeException.class)
-		          .isThrownBy(() -> Mono.error(boom).subscribe(v -> {}))
-	              .withCause(boom)
-	              .hasToString("reactor.core.Exceptions$ErrorCallbackNotImplemented: java.lang.IllegalArgumentException: boom");
+		TestLogger testLogger = new TestLogger();
+		LoggerUtils.enableCaptureWith(testLogger);
+		try {
+			RuntimeException boom = new IllegalArgumentException("boom");
+			Mono.error(boom)
+			    .subscribe(v -> {
+			    });
+			assertThat(testLogger.getErrContent())
+			          .contains("Operator called default onErrorDropped")
+			          .contains(
+					          "reactor.core.Exceptions$ErrorCallbackNotImplemented: java.lang.IllegalArgumentException: boom");
+		}
+		finally {
+			LoggerUtils.disableCapture();
+		}
 	}
 
 	@Test
@@ -288,7 +301,7 @@ public class LambdaMonoSubscriberTest {
 		    .doOnCancel(cancelCount::incrementAndGet)
 		    .subscribe(v -> {})
 		    .dispose();
-		Assertions.assertThat(cancelCount.get()).isEqualTo(1);
+		assertThat(cancelCount).hasValue(1);
 	}
 
 	@Test
@@ -297,16 +310,17 @@ public class LambdaMonoSubscriberTest {
 		Subscription parent = Operators.emptySubscription();
 		test.onSubscribe(parent);
 
-		Assertions.assertThat(test.scan(Scannable.Attr.PARENT)).isSameAs(parent);
-		Assertions.assertThat(test.scan(Scannable.Attr.PREFETCH)).isEqualTo(Integer.MAX_VALUE);
+		assertThat(test.scan(Scannable.Attr.PARENT)).isSameAs(parent);
+		assertThat(test.scan(Scannable.Attr.PREFETCH)).isEqualTo(Integer.MAX_VALUE);
+		assertThat(test.scan(Scannable.Attr.RUN_STYLE)).isSameAs(Scannable.Attr.RunStyle.SYNC);
 
-		Assertions.assertThat(test.scan(Scannable.Attr.TERMINATED)).isFalse();
-		Assertions.assertThat(test.scan(Scannable.Attr.CANCELLED)).isFalse();
+		assertThat(test.scan(Scannable.Attr.TERMINATED)).isFalse();
+		assertThat(test.scan(Scannable.Attr.CANCELLED)).isFalse();
 
 		test.dispose();
 
-		Assertions.assertThat(test.scan(Scannable.Attr.TERMINATED)).isTrue();
-		Assertions.assertThat(test.scan(Scannable.Attr.CANCELLED)).isTrue();
+		assertThat(test.scan(Scannable.Attr.TERMINATED)).isTrue();
+		assertThat(test.scan(Scannable.Attr.CANCELLED)).isTrue();
 	}
 
 	private static class TestSubscription implements Subscription {

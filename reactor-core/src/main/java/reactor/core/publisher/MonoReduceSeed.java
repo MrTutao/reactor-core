@@ -27,7 +27,7 @@ import reactor.util.annotation.Nullable;
 
 /**
  * Aggregates the source values with the help of an accumulator
- * function and emits the the final accumulated value.
+ * function and emits the final accumulated value.
  *
  * @param <T> the source value type
  * @param <R> the accumulated result type
@@ -51,18 +51,16 @@ final class MonoReduceSeed<T, R> extends MonoFromFluxOperator<T, R>
 
 	@Override
 	public CoreSubscriber<? super T> subscribeOrReturn(CoreSubscriber<? super R> actual) {
-		R initialValue;
-
-		try {
-			initialValue = Objects.requireNonNull(initialSupplier.get(),
-					"The initial value supplied is null");
-		}
-		catch (Throwable e) {
-			Operators.error(actual, Operators.onOperatorError(e, actual.currentContext()));
-			return null;
-		}
+		R initialValue = Objects.requireNonNull(initialSupplier.get(),
+				"The initial value supplied is null");
 
 		return new ReduceSeedSubscriber<>(actual, accumulator, initialValue);
+	}
+
+	@Override
+	public Object scanUnsafe(Attr key) {
+		if (key == Attr.RUN_STYLE) return Attr.RunStyle.SYNC;
+		return super.scanUnsafe(key);
 	}
 
 	static final class ReduceSeedSubscriber<T, R> extends Operators.MonoSubscriber<T, R>  {
@@ -78,7 +76,8 @@ final class MonoReduceSeed<T, R> extends MonoFromFluxOperator<T, R>
 				R value) {
 			super(actual);
 			this.accumulator = accumulator;
-			this.value = value;
+			//noinspection deprecation
+			this.value = value; //setValue is made NO-OP in order to ignore redundant writes in base class
 		}
 
 		@Override
@@ -86,6 +85,7 @@ final class MonoReduceSeed<T, R> extends MonoFromFluxOperator<T, R>
 		public Object scanUnsafe(Attr key) {
 			if (key == Attr.TERMINATED) return done;
 			if (key == Attr.PARENT) return s;
+			if (key == Attr.RUN_STYLE) return Attr.RunStyle.SYNC;
 
 			return super.scanUnsafe(key);
 		}
@@ -98,7 +98,9 @@ final class MonoReduceSeed<T, R> extends MonoFromFluxOperator<T, R>
 
 		@Override
 		public void setValue(R value) {
-			// value already saved
+			// value is updated directly in onNext. writes from the base class are redundant.
+			// if cancel() happens before first reduction, the seed is visible from constructor and will be discarded.
+			// if there was some accumulation in progress post cancel, onNext will take care of it.
 		}
 
 		@Override
@@ -127,7 +129,14 @@ final class MonoReduceSeed<T, R> extends MonoFromFluxOperator<T, R>
 					onError(Operators.onOperatorError(this, e, t, actual.currentContext()));
 					return;
 				}
-				value = accumulated;
+				if (STATE.get(this) == CANCELLED) {
+					discard(accumulated);
+					this.value = null;
+				}
+				else {
+					//noinspection deprecation
+					this.value = accumulated; //setValue is made NO-OP in order to ignore redundant writes in base class
+				}
 			} else {
 				Operators.onDiscard(t, actual.currentContext());
 			}
@@ -140,8 +149,8 @@ final class MonoReduceSeed<T, R> extends MonoFromFluxOperator<T, R>
 				return;
 			}
 			done = true;
-			Operators.onDiscard(value, actual.currentContext());
-			value = null;
+			discard(this.value);
+			this.value = null;
 
 			actual.onError(t);
 		}
@@ -153,7 +162,7 @@ final class MonoReduceSeed<T, R> extends MonoFromFluxOperator<T, R>
 			}
 			done = true;
 
-			complete(value);
+			complete(this.value);
 			//we DON'T null out the value, complete will do that once there's been a request
 		}
 	}

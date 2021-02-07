@@ -24,6 +24,7 @@ import java.util.stream.Stream;
 
 import org.reactivestreams.Publisher;
 import org.reactivestreams.Subscription;
+
 import reactor.core.CorePublisher;
 import reactor.core.CoreSubscriber;
 import reactor.core.Exceptions;
@@ -63,7 +64,14 @@ final class MonoDelayUntil<T> extends Mono<T> implements Scannable,
 			Function<? super T, ? extends Publisher<?>>[] triggerGenerators) {
 		this.source = Objects.requireNonNull(monoSource, "monoSource");
 		this.otherGenerators = triggerGenerators;
-		this.optimizableOperator = source instanceof OptimizableOperator ? (OptimizableOperator) source : null;
+		if (source instanceof OptimizableOperator) {
+			@SuppressWarnings("unchecked")
+			OptimizableOperator<?, T> optimSource = (OptimizableOperator<?, T>) source;
+			this.optimizableOperator = optimSource;
+		}
+		else {
+			this.optimizableOperator = null;
+		}
 	}
 
 	/**
@@ -85,11 +93,17 @@ final class MonoDelayUntil<T> extends Mono<T> implements Scannable,
 
 	@Override
 	public void subscribe(CoreSubscriber<? super T> actual) {
-		source.subscribe(subscribeOrReturn(actual));
+		try {
+			source.subscribe(subscribeOrReturn(actual));
+		}
+		catch (Throwable e) {
+			Operators.error(actual, Operators.onOperatorError(e, actual.currentContext()));
+			return;
+		}
 	}
 
 	@Override
-	public final CoreSubscriber<? super T> subscribeOrReturn(CoreSubscriber<? super T> actual) {
+	public final CoreSubscriber<? super T> subscribeOrReturn(CoreSubscriber<? super T> actual) throws Throwable {
 		DelayUntilCoordinator<T> parent = new DelayUntilCoordinator<>(actual, otherGenerators);
 		actual.onSubscribe(parent);
 
@@ -108,6 +122,7 @@ final class MonoDelayUntil<T> extends Mono<T> implements Scannable,
 
 	@Override
 	public Object scanUnsafe(Attr key) {
+		if (key == Attr.RUN_STYLE) return Attr.RunStyle.SYNC;
 		return null; //no particular key to be represented, still useful in hooks
 	}
 
@@ -150,7 +165,7 @@ final class MonoDelayUntil<T> extends Mono<T> implements Scannable,
 
 		@Override
 		public void onNext(T t) {
-			if (value == null) {
+			if (this.value == null) {
 				setValue(t);
 				subscribeNextTrigger(t, done);
 			}
@@ -163,7 +178,7 @@ final class MonoDelayUntil<T> extends Mono<T> implements Scannable,
 
 		@Override
 		public void onComplete() {
-			if (value == null && state < HAS_REQUEST_HAS_VALUE) {
+			if (this.value == null && state < HAS_REQUEST_HAS_VALUE) {
 				actual.onComplete();
 			}
 		}
@@ -172,6 +187,7 @@ final class MonoDelayUntil<T> extends Mono<T> implements Scannable,
 		@Nullable
 		public Object scanUnsafe(Attr key) {
 			if (key == Attr.TERMINATED) return done == n;
+			if (key == Attr.RUN_STYLE) return Attr.RunStyle.SYNC;
 
 			return super.scanUnsafe(key);
 		}
@@ -183,7 +199,10 @@ final class MonoDelayUntil<T> extends Mono<T> implements Scannable,
 
 
 		@SuppressWarnings("unchecked")
-		void subscribeNextTrigger(T value, int triggerIndex) {
+		void subscribeNextTrigger(@Nullable T value, int triggerIndex) {
+			if (value == null) {
+				return; //we've been cancelled
+			}
 			if (triggerSubscribers == NO_TRIGGER) {
 				triggerSubscribers = new DelayUntilTrigger[otherGenerators.length];
 			}
@@ -194,6 +213,7 @@ final class MonoDelayUntil<T> extends Mono<T> implements Scannable,
 
 			try {
 				p = generator.apply(value);
+				Objects.requireNonNull(p, "mapper returned null value");
 			}
 			catch (Throwable t) {
 				onError(t);
@@ -289,6 +309,7 @@ final class MonoDelayUntil<T> extends Mono<T> implements Scannable,
 			if (key == Attr.ACTUAL) return parent;
 			if (key == Attr.ERROR) return error;
 			if (key == Attr.PREFETCH) return Integer.MAX_VALUE;
+			if (key == Attr.RUN_STYLE) return Attr.RunStyle.SYNC;
 
 			return null;
 		}

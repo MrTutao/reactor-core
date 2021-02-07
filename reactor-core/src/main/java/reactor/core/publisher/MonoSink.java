@@ -21,6 +21,7 @@ import java.util.function.Function;
 import java.util.function.LongConsumer;
 
 import org.reactivestreams.Subscription;
+
 import reactor.core.CoreSubscriber;
 import reactor.core.Disposable;
 import reactor.util.annotation.Nullable;
@@ -35,27 +36,16 @@ import reactor.util.context.Context;
 public interface MonoSink<T> {
 
 	/**
-	 * Return the current subscriber {@link Context}.
-	 * <p>
-	 *   {@link Context} can be enriched via {@link Mono#subscriberContext(Function)}
-	 *   operator or directly by a child subscriber overriding
-	 *   {@link CoreSubscriber#currentContext()}
-	 *
-	 * @return the current subscriber {@link Context}.
-	 */
-	Context currentContext();
-
-	/**
 	 * Complete without any value. <p>Calling this method multiple times or after the
 	 * other terminating methods has no effect.
 	 */
 	void success();
 
-    /**
-	 * Complete with the given value.
+	/**
+	 * Complete this {@link Mono} with the given value.
 	 * <p>Calling this method multiple times or after the other
-	 * terminating methods has no effect (the value is purely ignored). Calling this method with
-	 * a {@code null} value will be silently accepted as a call to
+	 * terminating methods has no effect (the value is {@link Operators#onNextDropped(Object, Context) dropped}).
+	 * Calling this method with a {@code null} value will be silently accepted as a call to
 	 * {@link #success()} by standard implementations.
 	 *
 	 * @param value the value to complete with
@@ -63,16 +53,25 @@ public interface MonoSink<T> {
 	void success(@Nullable T value);
 
 	/**
-	 * Terminate with the give exception
+	 * Terminate with the given exception
 	 * <p>Calling this method multiple times or after the other terminating methods is
 	 * an unsupported operation. It will discard the exception through the
-	 * {@link Hooks#onErrorDropped(Consumer)} hook (which by default throws the exception
-	 * wrapped via {@link reactor.core.Exceptions#bubble(Throwable)}). This is to avoid
+	 * {@link Hooks#onErrorDropped(Consumer)} hook. This is to avoid
 	 * complete and silent swallowing of the exception.
-	 *
 	 * @param e the exception to complete with
 	 */
 	void error(Throwable e);
+
+	/**
+	 * Return the current subscriber {@link Context}.
+	 * <p>
+	 *   {@link Context} can be enriched via {@link Mono#contextWrite(Function)}
+	 *   operator or directly by a child subscriber overriding
+	 *   {@link CoreSubscriber#currentContext()}
+	 *
+	 * @return the current subscriber {@link Context}.
+	 */
+	Context currentContext();
 
 	/**
 	 * Attaches a {@link LongConsumer} to this {@link MonoSink} that will be notified of
@@ -86,12 +85,14 @@ public interface MonoSink<T> {
 
 	/**
 	 * Attach a {@link Disposable} as a callback for when this {@link MonoSink} is
-	 * cancelled. This happens only when the downstream {@link Subscription}
-	 * is {@link Subscription#cancel() cancelled}.
+	 * cancelled. At most one callback can be registered, and subsequent calls to this method
+	 * will result in the immediate disposal of the extraneous {@link Disposable}.
+	 * <p>
+	 * The callback is only relevant when the downstream {@link Subscription} is {@link Subscription#cancel() cancelled}.
 	 *
 	 * @param d the {@link Disposable} to use as a callback
 	 * @return the {@link MonoSink} with a cancellation callback
-	 * @see #onCancel(Disposable) onDispose(Disposable) for a callback that covers cancellation AND terminal signals
+	 * @see #onDispose(Disposable) onDispose(Disposable) for a callback that covers cancellation AND terminal signals
 	 */
 	MonoSink<T> onCancel(Disposable d);
 
@@ -99,6 +100,8 @@ public interface MonoSink<T> {
 	 * Attach a {@link Disposable} as a callback for when this {@link MonoSink} is effectively
 	 * disposed, that is it cannot be used anymore. This includes both having played terminal
 	 * signals (onComplete, onError) and having been cancelled (see {@link #onCancel(Disposable)}).
+	 * At most one callback can be registered, and subsequent calls to this method will result in
+	 * the immediate disposal of the extraneous {@link Disposable}.
 	 * <p>
 	 * Note that the "dispose" term is used from the perspective of the sink. Not to
 	 * be confused with {@link Mono#subscribe()}'s {@link Disposable#dispose()} method, which

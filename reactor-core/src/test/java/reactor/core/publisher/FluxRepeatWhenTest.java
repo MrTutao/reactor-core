@@ -24,23 +24,27 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.reactivestreams.Subscription;
+
 import reactor.core.CoreSubscriber;
 import reactor.core.Scannable;
 import reactor.test.StepVerifier;
 import reactor.test.subscriber.AssertSubscriber;
 import reactor.util.context.Context;
-import reactor.util.function.Tuples;
+import reactor.util.context.ContextView;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 public class FluxRepeatWhenTest {
 
-	@Test(expected = NullPointerException.class)
+	@Test
 	public void whenFactoryNull() {
-		Flux.never()
-		    .repeatWhen(null);
+		assertThatExceptionOfType(NullPointerException.class).isThrownBy(() -> {
+			Flux.never()
+					.repeatWhen(null);
+		});
 	}
 
 	@Test
@@ -86,7 +90,7 @@ public class FluxRepeatWhenTest {
 			    }
 		    });
 
-		assertThat(cancelled.get()).isEqualTo(1);
+		assertThat(cancelled).hasValue(1);
 	}
 
 	@Test
@@ -371,6 +375,15 @@ public class FluxRepeatWhenTest {
 	}
 
 	@Test
+	public void scanOperator(){
+		Flux<Integer> parent = Flux.just(1);
+		FluxRepeatWhen<Integer> test = new FluxRepeatWhen<>(parent, c -> c.take(3));
+
+		assertThat(test.scan(Scannable.Attr.PARENT)).isSameAs(parent);
+		assertThat(test.scan(Scannable.Attr.RUN_STYLE)).isSameAs(Scannable.Attr.RunStyle.SYNC);
+	}
+
+	@Test
     public void scanMainSubscriber() {
         CoreSubscriber<Integer> actual = new LambdaSubscriber<>(null, e -> {}, null, null);
         FluxRepeatWhen.RepeatWhenMainSubscriber<Integer> test =
@@ -380,6 +393,7 @@ public class FluxRepeatWhenTest {
 
         assertThat(test.scan(Scannable.Attr.PARENT)).isSameAs(parent);
         assertThat(test.scan(Scannable.Attr.ACTUAL)).isSameAs(actual);
+        assertThat(test.scan(Scannable.Attr.RUN_STYLE)).isSameAs(Scannable.Attr.RunStyle.SYNC);
         test.requested = 35;
         assertThat(test.scan(Scannable.Attr.REQUESTED_FROM_DOWNSTREAM)).isEqualTo(35L);
 
@@ -398,12 +412,13 @@ public class FluxRepeatWhenTest {
 
         assertThat(test.scan(Scannable.Attr.PARENT)).isSameAs(main.otherArbiter);
         assertThat(test.scan(Scannable.Attr.ACTUAL)).isSameAs(main);
+        assertThat(test.scan(Scannable.Attr.RUN_STYLE)).isSameAs(Scannable.Attr.RunStyle.SYNC);
     }
 
 	@Test
 	public void inners() {
 		CoreSubscriber<Integer> actual = new LambdaSubscriber<>(null, e -> {}, null, null);
-		CoreSubscriber<Long> signaller = new LambdaSubscriber<>(null, e -> {}, null, null);
+		Sinks.Many<Long> signaller = Sinks.unsafe().many().multicast().directBestEffort();
 		Flux<Integer> when = Flux.empty();
 		FluxRepeatWhen.RepeatWhenMainSubscriber<Integer> main = new FluxRepeatWhen.RepeatWhenMainSubscriber<>(actual, signaller, when);
 
@@ -413,89 +428,35 @@ public class FluxRepeatWhenTest {
 	}
 
 	@Test
-	public void repeatWhenContextTrigger_ReplacesOriginalContext() {
+	public void repeatWhenContextTrigger_MergesOriginalContext() {
 		final int REPEAT_COUNT = 3;
 		List<String> repeats = Collections.synchronizedList(new ArrayList<>(4));
-		List<Context> contexts = Collections.synchronizedList(new ArrayList<>(4));
+		List<ContextView> contexts = Collections.synchronizedList(new ArrayList<>(4));
 
 		Flux<String> retryWithContext =
 				Flux.just("A", "B")
 				    .doOnEach(sig -> {
 				    	if (sig.isOnComplete()) {
-						    Context ctx = sig.getContext();
+						    ContextView ctx = sig.getContextView();
 						    contexts.add(ctx);
 						    repeats.add("emitted " + ctx.get("emitted") + " elements this attempt, " + ctx.get("repeatsLeft") + " repeats left");
 					    }
 				    })
-				    .repeatWhen(emittedEachAttempt -> emittedEachAttempt
-						    .flatMap(e -> Mono.subscriberContext().map(ctx -> Tuples.of(e, ctx)))
-						    .flatMap(t2 -> {
-							    long lastEmitted = t2.getT1();
-							    Context ctx = t2.getT2();
-							    int rl = ctx.getOrDefault("repeatsLeft", 0);
-							    if (rl > 0) {
-								    return Mono.just(Context.of(
-										    "repeatsLeft", rl - 1,
-										    "emitted", lastEmitted));
-							    } else {
-								    return Mono.<Context>error(new IllegalStateException("repeats exhausted"));
-							    }
-						    })
-				    )
-				    .subscriberContext(Context.of("repeatsLeft", REPEAT_COUNT, "emitted", 0))
-				    .subscriberContext(Context.of("thirdPartyContext", "present"));
-
-		StepVerifier.create(retryWithContext)
-		            .expectNext("A", "B")
-		            .expectNext("A", "B")
-		            .expectNext("A", "B")
-		            .expectNext("A", "B")
-		            .expectErrorMessage("repeats exhausted")
-		            .verify(Duration.ofSeconds(1));
-
-		assertThat(repeats).containsExactly(
-				"emitted 0 elements this attempt, 3 repeats left",
-				"emitted 2 elements this attempt, 2 repeats left",
-				"emitted 2 elements this attempt, 1 repeats left",
-				"emitted 2 elements this attempt, 0 repeats left");
-
-		assertThat(contexts).first().matches(ctx -> ctx.hasKey("thirdPartyContext"));
-		assertThat(contexts).noneMatch(ctx -> ctx.getOrDefault("repeatsLeft", -1) != 3 && ctx.hasKey("thirdPartyContext"));
-
-		System.out.println(contexts);
-	}
-
-	@Test
-	public void repeatWhenContextTrigger_OriginalContextManuallyUpdated() {
-		final int REPEAT_COUNT = 3;
-		List<String> repeats = Collections.synchronizedList(new ArrayList<>(4));
-		List<Context> contexts = Collections.synchronizedList(new ArrayList<>(4));
-
-		Flux<String> retryWithContext =
-				Flux.just("A", "B")
-				    .doOnEach(sig -> {
-					    if (sig.isOnComplete()) {
-						    Context ctx = sig.getContext();
-						    contexts.add(ctx);
-						    repeats.add("emitted " + ctx.get("emitted") + " elements this attempt, " + ctx.get("repeatsLeft") + " repeats left");
+				    .repeatWhen(emittedEachAttempt -> emittedEachAttempt.handle((lastEmitted, sink) -> {
+					    Context ctx = sink.currentContext();
+					    int rl = ctx.getOrDefault("repeatsLeft", 0);
+					    if (rl > 0) {
+					        sink.next(Context.of(
+								    "repeatsLeft", rl - 1,
+								    "emitted", lastEmitted
+						    ));
 					    }
-				    })
-				    .repeatWhen(emittedEachAttempt -> emittedEachAttempt
-						    .flatMap(e -> Mono.subscriberContext().map(ctx -> Tuples.of(e, ctx)))
-						    .flatMap(t2 -> {
-							    long lastEmitted = t2.getT1();
-							    Context ctx = t2.getT2();
-							    int rl = ctx.getOrDefault("repeatsLeft", 0);
-							    if (rl > 0) {
-								    return Mono.just(ctx.put("repeatsLeft", rl - 1)
-										    .put("emitted", lastEmitted));
-							    } else {
-								    return Mono.<Context>error(new IllegalStateException("repeats exhausted"));
-							    }
-						    })
-				    )
-				    .subscriberContext(Context.of("repeatsLeft", REPEAT_COUNT, "emitted", 0))
-				    .subscriberContext(Context.of("thirdPartyContext", "present"));
+					    else {
+					        sink.error(new IllegalStateException("repeats exhausted"));
+					    }
+				    }))
+				    .contextWrite(Context.of("repeatsLeft", REPEAT_COUNT, "emitted", 0))
+				    .contextWrite(Context.of("thirdPartyContext", "present"));
 
 		StepVerifier.create(retryWithContext)
 		            .expectNext("A", "B")
@@ -512,5 +473,16 @@ public class FluxRepeatWhenTest {
 				"emitted 2 elements this attempt, 0 repeats left");
 
 		assertThat(contexts).allMatch(ctx -> ctx.hasKey("thirdPartyContext"));
+	}
+
+	@Test
+	void gh2579() {
+		 for (int i = 0; i < 1_000; i++) {
+			AtomicInteger sourceHelper = new AtomicInteger();
+			Flux.just("hello")
+					.filter(m -> sourceHelper.getAndIncrement() >= 9)
+					.repeatWhen(it -> it.delayElements(Duration.ofNanos(1)))
+					.blockFirst(Duration.ofSeconds(1));
+		 }
 	}
 }
